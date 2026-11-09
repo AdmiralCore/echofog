@@ -115,7 +115,22 @@ type Service struct {
 	seenMu    sync.Mutex
 	seen      map[dedupeKey]time.Time
 	seenOrder []dedupeEntry // insertion order: the oldest first
+
+	rateMu sync.Mutex
+	rate   map[[32]byte]*signalBucket
+
+	rateLimited atomic.Uint64
+	selfSignals atomic.Uint64
 }
+
+// signalBucket is a token bucket of the signals accepted from one device.
+type signalBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// maxSignalSources bounds the per-device buckets kept.
+const maxSignalSources = 1024
 
 type dedupeEntry struct {
 	key dedupeKey
@@ -146,7 +161,49 @@ type ServiceStats struct {
 }
 
 // Stats returns the counters.
-func (s *Service) Stats() ServiceStats { return ServiceStats{} }
+func (s *Service) Stats() ServiceStats {
+	return ServiceStats{
+		SignalsRateLimited: s.rateLimited.Load(),
+		SignalsSelf:        s.selfSignals.Load(),
+	}
+}
+
+// admitSignal takes one token from the device's budget. The bucket is bounded, and a bucket of a
+// device that went quiet is forgotten rather than shared.
+func (s *Service) admitSignal(device [32]byte) bool {
+	limit := float64(s.cfg.MaxSignalsPerSecond)
+	if limit <= 0 {
+		limit = DefaultMaxSignalsPerSecond
+	}
+	at := s.cfg.Now()
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	b := s.rate[device]
+	if b == nil {
+		if len(s.rate) >= maxSignalSources {
+			var oldest [32]byte
+			var oldestAt time.Time
+			first := true
+			for d, x := range s.rate {
+				if first || x.at.Before(oldestAt) {
+					oldest, oldestAt, first = d, x.at, false
+				}
+			}
+			delete(s.rate, oldest)
+		}
+		b = &signalBucket{tokens: limit, at: at}
+		s.rate[device] = b
+	}
+	if el := at.Sub(b.at); el > 0 {
+		b.tokens = min(limit, b.tokens+limit*el.Seconds())
+		b.at = at
+	}
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
 
 // New returns a call signalling service.
 func New(cfg Config) (*Service, error) {
@@ -185,6 +242,7 @@ func New(cfg Config) (*Service, error) {
 		cancel: cancel,
 		links:  map[[32]byte]*link{},
 		seen:   map[dedupeKey]time.Time{},
+		rate:   map[[32]byte]*signalBucket{},
 	}, nil
 }
 
@@ -231,8 +289,13 @@ func (s *Service) serve(ctx context.Context, p Peer, st Stream) {
 
 // Process verifies one SIGNAL wrapper and delivers it. It is used by the stream handler and by
 // the CALL_SIGNAL datagram loop; a bad signature, a wrong sender, an unknown action and a
-// duplicate are dropped with an error, never delivered.
+// duplicate are dropped with an error, never delivered. The per-device budget is taken first, so a
+// flood costs no parsing and no signature checks.
 func (s *Service) Process(ctx context.Context, p Peer, raw []byte) error {
+	if !s.admitSignal(p.Device) {
+		s.rateLimited.Add(1)
+		return ErrRateLimited
+	}
 	sig, err := Parse(raw)
 	if err != nil {
 		return err

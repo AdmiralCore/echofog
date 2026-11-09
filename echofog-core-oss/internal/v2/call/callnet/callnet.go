@@ -165,9 +165,28 @@ func (t *Transport) SendUnreliableFrame(peer types.PeerID, kind transport.Kind, 
 
 func (t *Transport) signal(peer types.PeerID, lossy bool, payload []byte) error {
 	if t.cfg.Signals == nil {
-		return errors.New("callnet: no signal port")
+		err := errors.New("callnet: no signal port")
+		t.refuseSignal("no-port", err)
+		return err
 	}
-	return t.cfg.Signals.SendSignal(peer, lossy, payload)
+	if err := t.cfg.Signals.SendSignal(peer, lossy, payload); err != nil {
+		t.refuseSignal("port", err)
+		return err
+	}
+	return nil
+}
+
+// refuseSignal keeps why a signal did not leave: a refused path report would otherwise be a
+// silent loss, and the broadcaster would never learn the viewer's path is full.
+func (t *Transport) refuseSignal(reason string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.stats.SignalRefused++
+	if t.stats.SignalReasons == nil {
+		t.stats.SignalReasons = map[string]uint64{}
+	}
+	t.stats.SignalReasons[reason]++
+	t.stats.LastSignalError = err.Error()
 }
 
 // RegisterFastFrameHandler sets the handler of one kind of inbound frame.
@@ -315,5 +334,12 @@ func (t *Transport) DirectLink(peer types.PeerID) bool {
 func (t *Transport) Stats() Stats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.stats
+	s := t.stats
+	if len(s.SignalReasons) > 0 {
+		s.SignalReasons = make(map[string]uint64, len(t.stats.SignalReasons))
+		for k, v := range t.stats.SignalReasons {
+			s.SignalReasons[k] = v
+		}
+	}
+	return s
 }
