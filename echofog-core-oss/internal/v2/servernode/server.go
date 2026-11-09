@@ -439,6 +439,10 @@ func suiteNumber(name string) uint32 {
 	return objects.SuiteNoise3
 }
 
+// CoverACMEHTTPClient is the HTTP client of the ACME account and orders; nil means a client with
+// a 30 s timeout. Tests point it at their own CA.
+var CoverACMEHTTPClient *http.Client
+
 // loadCoverCert reads the operator's certificate bundle: a PEM chain and its private key in one
 // file (the same shape selfcover stores). The doctor watches its expiry.
 func loadCoverCert(path string) (*tls.Certificate, error) {

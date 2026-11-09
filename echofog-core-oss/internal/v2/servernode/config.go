@@ -47,6 +47,19 @@ type OperatorSpec struct {
 	Addr string `json:"addr"`
 }
 
+// CoverACMESpec is how the cover obtains its certificate from a CA (RFC 8555) when cover_cert
+// is empty. AcceptTOS records the operator's acceptance of the CA's terms of service.
+type CoverACMESpec struct {
+	// DirectoryURL is the ACME directory; empty means the production CA.
+	DirectoryURL string `json:"directory,omitempty"`
+	// Email is the optional contact of the account.
+	Email string `json:"email,omitempty"`
+	// AcceptTOS records that the operator accepted the CA's terms of service.
+	AcceptTOS bool `json:"accept_tos"`
+	// Challenge is "tls-alpn-01", "http-01" or empty (the CA's choice, tls-alpn-01 first).
+	Challenge string `json:"challenge,omitempty"`
+}
+
 // Config is server.json in the data directory.
 type Config struct {
 	Version int          `json:"version"`
@@ -61,9 +74,11 @@ type Config struct {
 	Cover string `json:"cover,omitempty"`
 	// SiteDir is the folder with the site the cover imitates (T12.5); CoverCert is the certificate
 	// file of the cover domain, which the doctor watches for expiry.
-	SiteDir   string       `json:"site_dir,omitempty"`
-	CoverCert string       `json:"cover_cert,omitempty"`
-	Operator  OperatorSpec `json:"operator"`
+	SiteDir   string `json:"site_dir,omitempty"`
+	CoverCert string `json:"cover_cert,omitempty"`
+	// CoverACME configures the certificate when CoverCert is empty (T2.6e).
+	CoverACME *CoverACMESpec `json:"cover_acme,omitempty"`
+	Operator  OperatorSpec   `json:"operator"`
 }
 
 var allRoles = map[string]bool{"relay": true, "exit": true, "mailbox": true, "dht-server": true}
