@@ -20,18 +20,19 @@ type listenSpec struct {
 	Port          uint32
 }
 
-// parseListen parses "suite=HOST:PORT[,suite=HOST:PORT]". cover is the --cover value: it belongs
-// to reality2-quic, which waits for T2.6b, so it is refused until then.
+// parseListen parses "suite=HOST:PORT[,suite=HOST:PORT]". cover is the --cover value: the
+// camouflaged suites (reality2-quic, reality2-tcp, ws2) need it, and a plain noise3 node does not
+// accept it. --site-dir is checked when the node opens the profile (T2.6e).
 func parseListen(spec, cover string) ([]listenSpec, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		if cover != "" {
-			return nil, fmt.Errorf("--cover %q is only used by reality2-quic (T2.6b)", cover)
+			return nil, fmt.Errorf("--cover %q is only used by the camouflaged suites", cover)
 		}
 		return nil, nil
 	}
 	var out []listenSpec
-	sawReality := false
+	needsCover := false
 	for _, entry := range strings.Split(spec, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -54,9 +55,8 @@ func parseListen(spec, cover string) ([]listenSpec, error) {
 		if err != nil || port == 0 {
 			return nil, fmt.Errorf("listener %q: port %q", entry, portText)
 		}
-		if suite == objects.SuiteReality2QUIC {
-			sawReality = true
-			continue // reported below with the T2.6b message
+		if suite != objects.SuiteNoise3 {
+			needsCover = true
 		}
 		advertise, err := advertisedHost(host)
 		if err != nil {
@@ -65,11 +65,11 @@ func parseListen(spec, cover string) ([]listenSpec, error) {
 		bind := net.JoinHostPort(host, portText)
 		out = append(out, listenSpec{Suite: suite, Bind: bind, AdvertiseHost: advertise, Port: uint32(port)})
 	}
-	if sawReality {
-		return nil, fmt.Errorf("reality2-quic listeners wait for T2.6b (the reproducible cover); use noise3")
+	if needsCover && cover == "" {
+		return nil, fmt.Errorf("--cover is required for reality2 and ws2 listeners")
 	}
-	if cover != "" {
-		return nil, fmt.Errorf("--cover %q is only used by reality2-quic (T2.6b)", cover)
+	if cover != "" && !needsCover {
+		return nil, fmt.Errorf("--cover %q is only used by the camouflaged suites", cover)
 	}
 	return out, nil
 }

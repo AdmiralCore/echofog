@@ -351,38 +351,31 @@ func TestNothingReachableStaysWaiting(t *testing.T) {
 	}
 }
 
-func TestLostSessionIsRepairedByTheReceiver(t *testing.T) {
+func TestLostStateIsRepairedByANewInit(t *testing.T) {
 	w := newWorld(t)
 	a, b := w.newPeer(), w.newPeer()
 	w.send(a, b, "first")
 	w.tick(a)
-	// b loses its sessions (a new store). It answers every ratchet message with the same refusal,
-	// whether it has a session or not; after three distinct ones it starts a new session itself.
+	// a message of a for b, still queued when b loses its sessions (a new store)
+	id := w.send(a, b, "lost")
 	b.dir = t.TempDir()
 	b.restart()
-	var ids [][16]byte
-	for _, s := range []string{"m1", "m2", "m3"} {
-		ids = append(ids, w.send(a, b, s))
+	w.tick(a) // b cannot open it and answers the same refusal as for a stranger
+	if st, _ := a.svc.Status(id); st == StateDelivered {
+		t.Fatal("delivered although b could not read it")
 	}
-	w.tick(a)
-	for _, id := range ids {
-		if st, _ := a.svc.Status(id); st == StateDelivered {
-			t.Fatal("delivered although b could not read it")
-		}
-	}
-	w.tick(b) // b starts the new session
-	// the pending messages were made for the lost session: a makes them again for the new one
+	// b has no session, so the first message it sends is a fresh PQXDH init; a accepts it and
+	// rebuilds what waited for the old session
+	w.send(b, a, "i am here")
+	w.tick(b)
 	for i := 0; i < 3; i++ {
 		w.clock.Add(time.Minute)
 		w.tick(a, b)
 	}
-	for _, id := range ids {
-		if st, _ := a.svc.Status(id); st != StateDelivered {
-			t.Fatalf("not delivered after the repair: %v", st)
-		}
+	if st, _ := a.svc.Status(id); st != StateDelivered {
+		t.Fatalf("not delivered after b's fresh init: %v", st)
 	}
-	got := b.texts()
-	if len(got) < 3 || got[len(got)-1] != "m3" {
+	if got := b.texts(); len(got) < 2 || got[len(got)-1] != "lost" {
 		t.Fatalf("b got %v", got)
 	}
 }
@@ -583,49 +576,41 @@ func TestMessageAboveTheLastBucketIsRefusedAtSend(t *testing.T) {
 	}
 }
 
-// Three distinct messages that fail within ten minutes make the receiver start a fresh PQXDH session
-// itself; the old one stays for late messages (services.md 4.4).
-func TestThreeFailuresStartANewSession(t *testing.T) {
+// A reset that a device sends inside a message the receiver can open is authenticated: it makes
+// the receiver start a fresh PQXDH session with that device (services.md 4.4, ЧМ-1).
+func TestAuthenticatedResetStartsAFreshSession(t *testing.T) {
 	w := newWorld(t)
 	a, b := w.newPeer(), w.newPeer()
 	w.send(a, b, "hello")
 	w.tick(a)
-	if len(b.texts()) != 1 {
-		t.Fatal("setup")
-	}
-	bad := func() []byte {
-		m := mustEnc(t, a, b, "will be bent")
-		m[len(m)-3] ^= 0x55
-		return craft(t, b, a, a.self.Account, a.self.DeviceKey, m, false)
-	}
-	for i := 0; i < 2; i++ {
-		if st := b.svc.Receive(context.Background(), bad()); st != chatpb.StatusRefused {
-			t.Fatalf("a bent message: %d", st)
-		}
-		w.clock.Add(time.Minute)
+	reset := &chatpb.PersonalMessageProto{Control: &chatpb.Control{Kind: &chatpb.Control_Reset_{Reset_: &chatpb.Reset{}}}}
+	if _, err := b.svc.Send(context.Background(), a.self.Node, reset); err != nil {
+		t.Fatal(err)
 	}
 	w.tick(b)
-	if len(a.ctrl) != 0 {
-		t.Fatal("recovery started after two failures")
-	}
-	if st := b.svc.Receive(context.Background(), bad()); st != chatpb.StatusRefused {
-		t.Fatalf("the third: %d", st)
-	}
-	w.tick(b)
-	var reset bool
-	for _, c := range a.ctrl {
-		if c.GetReset_() != nil {
-			reset = true
-		}
-	}
-	if !reset {
-		t.Fatalf("a got no reset: %v", a.ctrl)
-	}
-	// the fresh session works both ways
+	// a has opened the reset; its next message starts a new session instead of using the old one
 	w.send(a, b, "after the reset")
 	w.tick(a)
+	last := w.sent[len(w.sent)-1]
+	inner, err := b.cr.OpenEnvelope(b.self.Node, last.env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := chatpb.ParseInner(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(in.PqxdhInit) == 0 {
+		t.Fatal("the reset did not start a fresh PQXDH: the message went on the old session")
+	}
 	if got := b.texts(); got[len(got)-1] != "after the reset" {
 		t.Fatalf("b got %v", got)
+	}
+	// and the new session works the other way too
+	w.send(b, a, "back")
+	w.tick(b)
+	if got := a.texts(); got[len(got)-1] != "back" {
+		t.Fatalf("a got %v", got)
 	}
 }
 

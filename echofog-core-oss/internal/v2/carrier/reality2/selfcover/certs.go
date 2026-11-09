@@ -69,8 +69,13 @@ type ACMEConfig struct {
 type CertsConfig struct {
 	Domain string
 	ACME   ACMEConfig
+	// Static is a ready certificate for Domain (the operator's own cover_cert bundle). When set,
+	// ACME is not used and the certificate is not renewed by this process: the operator renews
+	// it and restarts the node. It must match Domain and its key.
+	Static *tls.Certificate
 	// KV keeps the account key and the certificate across restarts (T4.3); required, so a node
 	// that restarts does not ask the CA for a new certificate each time and hit its rate limits.
+	// It is still required with Static: the measured profiles and the replay cache live beside it.
 	KV carrier.KV
 	// Now and Sleep are the injectable clock of the renewal loop; nil means the real ones.
 	Now   func() time.Time
@@ -120,7 +125,29 @@ func NewCerts(cfg CertsConfig) (*Certs, error) {
 	if dir == "" {
 		dir = DefaultDirectory
 	}
-	return &Certs{cfg: cfg, domain: d, dir: dir, alpn: map[string]*tls.Certificate{}, tokens: map[string]string{}}, nil
+	c := &Certs{cfg: cfg, domain: d, dir: dir, alpn: map[string]*tls.Certificate{}, tokens: map[string]string{}}
+	if cfg.Static != nil {
+		leaf := cfg.Static.Leaf
+		if leaf == nil {
+			if len(cfg.Static.Certificate) == 0 {
+				return nil, errors.New("selfcover: the static certificate has no leaf")
+			}
+			var err error
+			if leaf, err = x509.ParseCertificate(cfg.Static.Certificate[0]); err != nil {
+				return nil, fmt.Errorf("selfcover: static certificate: %w", err)
+			}
+			cfg.Static.Leaf = leaf
+		}
+		if err := leaf.VerifyHostname(d); err != nil {
+			return nil, fmt.Errorf("selfcover: static certificate is not for %s: %w", d, err)
+		}
+		signer, ok := cfg.Static.PrivateKey.(crypto.Signer)
+		if !ok || !samePublic(signer.Public(), leaf.PublicKey) {
+			return nil, errors.New("selfcover: the static certificate key does not match")
+		}
+		c.cur, c.leaf = cfg.Static, leaf
+	}
+	return c, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -145,6 +172,13 @@ func (c *Certs) Leaf() *x509.Certificate {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.leaf
+}
+
+// Current is the certificate the website presents, nil before the first one.
+func (c *Certs) Current() *tls.Certificate {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cur
 }
 
 // GetCertificate is the tls.Config hook of the website and of the admitted connections. It
@@ -185,8 +219,11 @@ func (c *Certs) HTTPHandler(fallback http.Handler) http.Handler {
 
 // Ensure makes sure a usable certificate is installed: the stored one when it is still good,
 // otherwise a new one from the CA. The validation servers (HTTPHandler, the TLS listener) must
-// already be running, because the CA connects to them.
+// already be running, because the CA connects to them. A static certificate is already installed.
 func (c *Certs) Ensure(ctx context.Context) error {
+	if c.cfg.Static != nil {
+		return nil
+	}
 	if cert, err := c.load(ctx); err == nil && c.cfg.Now().Before(c.renewAt(cert.Leaf)) {
 		c.install(cert)
 		return nil
@@ -196,7 +233,11 @@ func (c *Certs) Ensure(ctx context.Context) error {
 
 // Run renews the certificate before it expires and returns when ctx ends. A failed renewal is
 // retried after about an hour, and the certificate in use stays until a new one is installed.
+// A static certificate is renewed by the operator, so Run returns at once.
 func (c *Certs) Run(ctx context.Context) {
+	if c.cfg.Static != nil {
+		return
+	}
 	for {
 		leaf := c.Leaf()
 		wait := retryAfterFailure

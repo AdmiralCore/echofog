@@ -20,7 +20,7 @@ func cmdCard(args []string) error {
 	data := fs.String("data", "", "profile data directory")
 	scopeName := fs.String("scope", "peer", "public or peer")
 	listen := fs.String("listen", "", "override the listeners of the last run")
-	cover := fs.String("cover", "", "cover host:port of reality2-quic (waits for T2.6b)")
+	cover := fs.String("cover", "", "cover host:port of the camouflaged suites (own cover, T2.6e)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

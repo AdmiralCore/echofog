@@ -49,6 +49,10 @@ type nodeFile struct {
 	Profile string   `json:"profile"`
 	Listen  []string `json:"listen,omitempty"`
 	Cover   string   `json:"cover,omitempty"`
+	// SiteDir and CoverCert are the own-cover material of T2.6e: the operator's site folder and
+	// the optional certificate bundle (ACME when empty).
+	SiteDir   string `json:"site_dir,omitempty"`
+	CoverCert string `json:"cover_cert,omitempty"`
 	// Bootstrap is the path of the bootstrap list (T5.5).
 	Bootstrap string `json:"bootstrap,omitempty"`
 }
