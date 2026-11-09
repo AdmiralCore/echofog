@@ -484,7 +484,7 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 		plan = res.Plan
 		if res.Applied {
 			// The screen owns the apply: a second Install would see the fresh profile and fail.
-			return printPlainFinal(out, plan, res.Info)
+			return printTUIResult(out, plan, res.Info)
 		}
 	case *yes:
 		if *presetName == "" || *advertise == "" {
@@ -622,6 +622,16 @@ func confirmReader(in *bufio.Reader, out io.Writer, lang string) (bool, error) {
 // printPlainFinal shows the result without a full-screen interface. The recovery phrase and the
 // operator token never go to the plain output: they live in files under the data folder.
 func printPlainFinal(out io.Writer, plan *SetupPlan, info *FinalInfo) error {
+	return printFinal(out, plan, info, true)
+}
+
+// printTUIResult is the short text after the full-screen pass. The operator confirmed the phrase
+// on its screen and the file is deleted, so pointing at that file would be wrong.
+func printTUIResult(out io.Writer, plan *SetupPlan, info *FinalInfo) error {
+	return printFinal(out, plan, info, false)
+}
+
+func printFinal(out io.Writer, plan *SetupPlan, info *FinalInfo, phraseFile bool) error {
 	fmt.Fprintln(out, "\n"+Message(plan.Lang, "setup.done.title"))
 	if info.PublicLink != "" {
 		fmt.Fprintln(out, Message(plan.Lang, "setup.done.link", info.PublicLink))
@@ -636,7 +646,9 @@ func printPlainFinal(out io.Writer, plan *SetupPlan, info *FinalInfo) error {
 	if info.DataDir != "" {
 		dataDir = info.DataDir
 	}
-	fmt.Fprintln(out, Message(plan.Lang, "setup.done.phrase-file", filepath.ToSlash(recoveryPath(dataDir))))
+	if phraseFile {
+		fmt.Fprintln(out, Message(plan.Lang, "setup.done.phrase-file", filepath.ToSlash(recoveryPath(dataDir))))
+	}
 	fmt.Fprintln(out, Message(plan.Lang, "setup.done.token-file", filepath.ToSlash(filepath.Join(dataDir, tokenFileName))))
 	fmt.Fprintln(out, Message(plan.Lang, "setup.done.status", dataDir))
 	for _, w := range info.Warnings {
