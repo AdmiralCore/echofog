@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,12 @@ func TestV2LogsCarryNoScenarioData(t *testing.T) {
 	b.node.Logger = logger
 	a.start()
 	b.start()
+	// The guard is a guard only when the v2 runtime's own lines reach this writer. It takes the
+	// facade logger (NodeApi.Logger) when it is built, so writing through the node's logger alone
+	// leaves the buffer empty and the check below passes without seeing a single line.
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "dht: publication")
+	}, 10*time.Second, 50*time.Millisecond, "the captured log must carry the v2 runtime's own lines")
 	aSeesB, bSeesA := befriend(t, a, b)
 	logs.Reset() // startup is not the scenario
 
