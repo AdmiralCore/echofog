@@ -158,6 +158,102 @@ func TestConeInitiatorSpraysAndBinds(t *testing.T) {
 	}
 }
 
+// stuckInitNet is the socket side of an Init that never completes: DialFrom waits for the deadline
+// of the context it gets and remembers when that happened on the injected clock.
+type stuckInitNet struct {
+	simNet
+	clk *fakeClock
+	mu  sync.Mutex
+	// starts and ends are the fake-clock times of each DialFrom call and its return.
+	starts, ends []time.Time
+}
+
+func (b *stuckInitNet) DialFrom(ctx context.Context, _ Sock, _ netip.AddrPort, _ int) (mux.Carrier, error) {
+	b.mu.Lock()
+	b.starts = append(b.starts, b.clk.Now())
+	b.mu.Unlock()
+	<-ctx.Done()
+	b.mu.Lock()
+	b.ends = append(b.ends, b.clk.Now())
+	b.mu.Unlock()
+	return nil, ctx.Err()
+}
+
+func (b *stuckInitNet) firstInit() (calls int, took time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.starts) == 0 || len(b.ends) == 0 {
+		return len(b.starts), 0
+	}
+	return len(b.starts), b.ends[0].Sub(b.starts[0])
+}
+
+func (b *stuckInitNet) initCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.starts)
+}
+
+func (b *stuckInitNet) initDone() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.ends)
+}
+
+// A false hit — a datagram with the peer's IP that no real flow stands behind — costs only an Init.
+// That Init gets its own InitAfterHit from the moment of the hit, not the general AttemptTime of step
+// 6; when it does not complete, the attempt fails and the session stays relayed. Without the separate
+// deadline the Init borrows the whole attempt (5 s plus the 3 s punching window) and this goes red.
+func TestDialInitAfterHitBoundedBySpec(t *testing.T) {
+	r := newBDRig(t, Initiator, true, NATInfo{NATSymmetric, 40000, 41999, 5}, openG)
+	peer := r.w.addNAT("203.0.113.5", false, 0, 0, 79)
+	bn := &stuckInitNet{simNet: simNet{n: r.own}, clk: r.clk}
+	r.bd = NewBirthday(BirthdayConfig{Clock: r.clk, Net: bn,
+		Rand: func(n int64) int64 { return n / 2 }, Gates: func() Gates { return r.gates }})
+	r.eng.cfg.Birthday = r.bd
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.eng.Run(ctx) }()
+	nonce := offerNonce(t, r.rig)
+	r.answer(nonce, frame.PunchOffer{Addrs: []netip.AddrPort{peer.coneAddr()},
+		Nat: uint32(NATCone), Mode: uint32(ModeSpray)})
+	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return len(r.own.packets()) > 0 })
+	spoofFromPeer(peer, r.own)
+	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return bn.initCalls() > 0 })
+	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return bn.initDone() > 0 })
+	_, took := bn.firstInit()
+	if took > InitAfterHit {
+		t.Fatalf("Init after a false hit ran %v, the deadline is %v", took, InitAfterHit)
+	}
+	if took < InitAfterHit {
+		t.Fatalf("Init after a false hit ended after %v, want the full %v", took, InitAfterHit)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop after the attempt failed")
+	}
+}
+
+// spoofFromPeer delivers a datagram from the peer's IP to every open birthday socket of n, as a
+// packet with a forged source would arrive.
+func spoofFromPeer(peer, n *simNAT) {
+	n.mu.Lock()
+	ports := make([]uint16, 0, len(n.maps))
+	for _, m := range n.maps {
+		if m.dest == peer.coneAddr() {
+			ports = append(ports, m.ext)
+		}
+	}
+	n.mu.Unlock()
+	for _, p := range ports {
+		_ = peer.listener.Send(netip.AddrPortFrom(n.ip, p), make([]byte, 40))
+	}
+}
+
 // The responder side: a symmetric initiator's offer makes a cone responder spray on PUNCH_SYNC (and
 // send no legacy junk), and a closed gate makes it silent.
 func TestConeResponderSpraysOnSync(t *testing.T) {

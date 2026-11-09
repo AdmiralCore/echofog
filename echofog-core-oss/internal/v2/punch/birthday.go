@@ -28,6 +28,9 @@ const (
 	MaxPunchPackets = 960
 	// PunchWindow bounds the punching phase of one attempt.
 	PunchWindow = 3 * time.Second
+	// InitAfterHit bounds the Init that follows a hit; it runs from the hit, separately from the
+	// general AttemptTime of step 6 (services.md §6.4.1).
+	InitAfterHit = 3 * time.Second
 	// PunchRate is the average datagrams per second.
 	PunchRate = 320
 	// MaxConcurrent is how many birthday attempts may run on a node at once.

@@ -29,6 +29,9 @@ func TestBirthdayLimitsMatchSpec(t *testing.T) {
 	if PunchWindow != 3*time.Second {
 		t.Errorf("punch window = %v, spec says 3s", PunchWindow)
 	}
+	if InitAfterHit != 3*time.Second {
+		t.Errorf("Init after a hit = %v, spec says 3s", InitAfterHit)
+	}
 	if PunchRate != 320 {
 		t.Errorf("punch rate = %d, spec says 320 datagrams per second", PunchRate)
 	}
