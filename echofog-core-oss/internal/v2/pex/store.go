@@ -86,6 +86,8 @@ type Store struct {
 	mu    sync.Mutex
 	new   map[[32]byte]*entry
 	tried map[[32]byte]*entry
+
+	allowNonRoutable bool
 }
 
 // Open loads both tables. Cards are verified again on load with the injected clock: a damaged,
@@ -95,13 +97,14 @@ func Open(opts Options) (*Store, error) {
 		return nil, fmt.Errorf("%w: no store namespace", ErrConfig)
 	}
 	s := &Store{
-		kv:       opts.KV,
-		log:      opts.Log,
-		now:      opts.Now,
-		maxNew:   opts.MaxNew,
-		maxTried: opts.MaxTried,
-		new:      map[[32]byte]*entry{},
-		tried:    map[[32]byte]*entry{},
+		kv:               opts.KV,
+		log:              opts.Log,
+		now:              opts.Now,
+		maxNew:           opts.MaxNew,
+		maxTried:         opts.MaxTried,
+		new:              map[[32]byte]*entry{},
+		tried:            map[[32]byte]*entry{},
+		allowNonRoutable: opts.AllowNonRoutable,
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -164,6 +167,10 @@ func (s *Store) load(prefix byte, into map[[32]byte]*entry) error {
 				cursor = rec.Key
 				continue
 			}
+			if !s.allowNonRoutable && !routableCard(card) {
+				cursor = rec.Key
+				continue
+			}
 			e.card = card
 			into[id] = e
 			cursor = rec.Key
@@ -181,6 +188,11 @@ func (s *Store) load(prefix byte, into map[[32]byte]*entry) error {
 // It returns true when the device was new to both tables.
 func (s *Store) AddCandidate(c *objects.Card, now time.Time) bool {
 	if c == nil || !c.Publishable() {
+		return false
+	}
+	if !s.allowNonRoutable && !routableCard(c) {
+		// The answerer chose this address: loopback, private and metadata ranges would make
+		// the node probe its own network (services.md §3, security.md §3 S26).
 		return false
 	}
 	nowu := unix(now)
@@ -495,6 +507,49 @@ func decodeRecord(b []byte) (*entry, bool) {
 		reached: reached,
 		addr:    addr,
 	}, true
+}
+
+// pexCGNAT and pexDocPrefixes are address ranges a PEX answerer must not send the node to: they
+// are not public unicast endpoints of an independent peer.
+var (
+	pexCGNAT       = netip.MustParsePrefix("100.64.0.0/10")
+	pexDocPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("2001:db8::/32"),
+	}
+)
+
+// routableCard reports whether every IP address of a card is a public unicast address. A card
+// received from PEX is chosen by whoever answered: loopback, private, link-local (cloud
+// metadata), CGNAT, ULA and documentation ranges would make the node probe its own network or
+// someone else's (ДР-2, the same rule as dht/routableCard). Host names cannot be judged before
+// resolution and pass.
+func routableCard(c *objects.Card) bool {
+	for _, a := range c.Addrs() {
+		host := a.GetHost()
+		if host == "" {
+			continue
+		}
+		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			continue
+		}
+		ip = ip.Unmap()
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			return false
+		}
+		if pexCGNAT.Contains(ip) {
+			return false
+		}
+		for _, p := range pexDocPrefixes {
+			if p.Contains(ip) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // cardLive reports whether the card may still be used at now. It follows the same rule as
