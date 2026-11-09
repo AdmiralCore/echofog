@@ -27,6 +27,9 @@ computer outside the tunnel**, and it stays so until the protection is turned of
 - **Held state.** When the tunnel is lost, the filters stay and the application shows the banner with
   the button **Disable protection**. It is also what is shown after the application crashed and was
   started again.
+- **A reboot clears the table.** Unlike the Windows filters, nftables rules are not restored by the
+  kernel after a reboot: the network is open until the mode is turned on again. That is the same state
+  as before the first start; nothing of EchoFog holds the computer closed in between.
 
 ## Identifiers
 
