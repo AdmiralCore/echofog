@@ -257,6 +257,109 @@ func spoofFromPeer(peer, n *simNAT) {
 	}
 }
 
+// mutualStuckNet is the socket side of a mutual responder that sees a false hit: every socket
+// echoes the datagram it sent back as if the peer had answered from its guessed port, so Mutual
+// finds a mapping at once, and the Init that follows never completes. It records the fake-clock
+// times of each DialFrom call and its return.
+type mutualStuckNet struct {
+	clk *fakeClock
+	mu  sync.Mutex
+	// starts and ends are the fake-clock times of each DialFrom call and its return.
+	starts, ends []time.Time
+}
+
+type mutualEchoSock struct {
+	recv chan Datagram
+}
+
+func (n *mutualStuckNet) OpenSock() (Sock, error) {
+	return &mutualEchoSock{recv: make(chan Datagram, 4096)}, nil
+}
+
+func (n *mutualStuckNet) Listener() Sock { return nil }
+
+func (n *mutualStuckNet) DialFrom(ctx context.Context, _ Sock, _ netip.AddrPort, _ int) (mux.Carrier, error) {
+	n.mu.Lock()
+	n.starts = append(n.starts, n.clk.Now())
+	n.mu.Unlock()
+	<-ctx.Done()
+	n.mu.Lock()
+	n.ends = append(n.ends, n.clk.Now())
+	n.mu.Unlock()
+	return nil, ctx.Err()
+}
+
+func (n *mutualStuckNet) AcceptOn(context.Context, Sock) error { return nil }
+
+func (s *mutualEchoSock) Send(to netip.AddrPort, _ []byte) error {
+	select {
+	case s.recv <- Datagram{From: to}:
+	default:
+	}
+	return nil
+}
+
+func (s *mutualEchoSock) Recv() <-chan Datagram { return s.recv }
+func (s *mutualEchoSock) Close() error          { return nil }
+
+func (n *mutualStuckNet) firstInit() (calls int, took time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.starts) == 0 || len(n.ends) == 0 {
+		return len(n.starts), 0
+	}
+	return len(n.starts), n.ends[0].Sub(n.starts[0])
+}
+
+func (n *mutualStuckNet) initCalls() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.starts)
+}
+
+func (n *mutualStuckNet) initDone() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.ends)
+}
+
+// The mutual responder with the lower ID is the noise3 initiator. Its Init after a hit gets the
+// same own 3 s of services.md §6.4.1 as the initiator's: the responder's general context lasts
+// PunchWindow+AttemptTime (8 s), and the Init must not borrow it. The hit here is a false one — a
+// datagram from the peer's guessed port with no real flow behind it — so without the separate
+// deadline this goes red at about 8 s.
+func TestMutualResponderInitAfterHitBoundedBySpec(t *testing.T) {
+	r := newBDRig(t, Responder, true, NATInfo{NATSymmetric, 40000, 41999, 5}, openG)
+	bn := &mutualStuckNet{clk: r.clk}
+	r.bd = NewBirthday(BirthdayConfig{Clock: r.clk, Net: bn,
+		Rand: func(n int64) int64 { return n / 2 }, Gates: func() Gates { return r.gates }})
+	r.eng.cfg.Birthday = r.bd
+
+	off := frame.PunchOffer{Addrs: []netip.AddrPort{netip.MustParseAddrPort("203.0.113.5:50000")}, Nonce: 99,
+		Nat: uint32(NATSymmetric), PortLo: 40000, PortHi: 41999, Samples: 5}
+	r.eng.HandleControl(frame.Frame{Type: frame.TypePunchOffer, Payload: off.Append(nil)})
+	ans, err := frame.ParsePunchOffer(r.link.frames(frame.TypePunchOffer)[0].payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Mode != uint32(ModeMutual) {
+		t.Fatalf("answer mode %d, want mutual", ans.Mode)
+	}
+	r.eng.HandleControl(syncFrame(99))
+	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return bn.initCalls() > 0 })
+	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return bn.initDone() > 0 })
+	// The spec's 3 s stands on its own, so the test does not compare against InitAfterHit.
+	const specDeadline = 3 * time.Second
+	_, took := bn.firstInit()
+	if took > specDeadline {
+		t.Fatalf("mutual responder's Init after a false hit ran %v, the spec deadline is %v", took, specDeadline)
+	}
+	if took < specDeadline {
+		t.Fatalf("mutual responder's Init after a false hit ended after %v, want the full %v", took, specDeadline)
+	}
+	r.eng.Close()
+}
+
 // The responder side: a symmetric initiator's offer makes a cone responder spray on PUNCH_SYNC (and
 // send no legacy junk), and a closed gate makes it silent.
 func TestConeResponderSpraysOnSync(t *testing.T) {
