@@ -238,7 +238,7 @@ func open(cfg config, cb Callbacks, host hostListeners) (inst *instance, err err
 	}); err != nil {
 		return nil, fmt.Errorf("mobile: store: %w", err)
 	}
-	if inst.clock, err = clock.New(clock.Config{}); err != nil {
+	if inst.clock, err = clock.New(clock.StartupConfig(nil, 30*time.Second)); err != nil {
 		return nil, err
 	}
 	role := uint32(objects.RoleUser)

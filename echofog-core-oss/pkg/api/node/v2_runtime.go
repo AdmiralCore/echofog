@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/network"
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/app"
 	"github.com/echofog/echofog-core/internal/v2/bootstrap"
@@ -65,6 +67,31 @@ type v2Settings struct {
 	// Bootstrap is the path of a bootstrap list (T5.5); relative paths are inside the v2 directory.
 	// The build carries no addresses of its own.
 	Bootstrap string `json:"bootstrap,omitempty"`
+}
+
+// clockProxy is the route of the clock's CDN check: the same SOCKS5 proxy or VPN exit the
+// app's own lookups use (T11.6a). allowed is false in anonymous mode with no route out: the
+// check stays off rather than show the address.
+func (n *NodeApi) clockProxy() (proxy *url.URL, allowed bool) {
+	p := network.OutboundProxy()
+	if p == "" && n.node != nil && n.node.Cfg != nil && n.node.Cfg.IsV2() {
+		p = n.node.Cfg.Network.Proxy
+	}
+	if p != "" {
+		return &url.URL{Scheme: "socks5", Host: p}, true
+	}
+	n.vpn.mu.Lock()
+	srv := n.vpn.server
+	n.vpn.mu.Unlock()
+	if srv != nil {
+		if a := srv.Addr(); a != nil {
+			return &url.URL{Scheme: "socks5", Host: a.String()}, true
+		}
+	}
+	if n.node != nil && n.node.AnonMode() != "" {
+		return nil, false
+	}
+	return nil, true
 }
 
 const (
@@ -468,7 +495,11 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("device list: %w", err)
 	}
-	clk, err := clock.New(clock.Config{})
+	clkCfg := clock.Config{}
+	if proxy, allowed := n.clockProxy(); allowed {
+		clkCfg = clock.StartupConfig(proxy, ownHTTPTimeout)
+	}
+	clk, err := clock.New(clkCfg)
 	if err != nil {
 		return nil, err
 	}

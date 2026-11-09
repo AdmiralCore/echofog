@@ -11,10 +11,12 @@
 // # Peer offset
 //
 // AddOutgoingSample records the time one peer of a session this node dialed reported. Incoming
-// sessions give no sample. The clock keeps one sample per /16 network (IPv6: /32), the last five
-// networks; a newer sample from a network replaces its previous one. The offset is the median of
-// the samples and is used only when at least 3 networks gave samples. One update moves it by at most
-// 120 s and it never exceeds 600 s from the raw clock; a larger correction needs the CDN check.
+// sessions give no sample, and neither does a session that carried no usable time. A sample stays
+// valid for 24 hours: older samples are discarded and no longer hold the offset. The clock keeps
+// one sample per /16 network (IPv6: /32), the last five networks; a newer sample from a network
+// replaces its previous one. The offset is the median of the samples and is used only when at
+// least 3 live networks gave samples. One update moves it by at most 120 s and it never exceeds
+// 600 s from the raw clock; a larger correction needs the CDN check.
 //
 // With an even number of samples the median is the midpoint of the two central values, applied only
 // when they agree within 2 s; otherwise there is no estimate and the offset drifts back to the raw
@@ -30,10 +32,11 @@
 // is the median of the majority cluster.
 //
 // The endpoint list is configuration: DefaultEndpoints returns the registries.md §12
-// list, and users or distributions may replace it. The HTTP client is injected, because
-// requests must use browser-shaped TLS and, in anonymous mode, the node's proxy; this
-// package never builds a transport of its own. *http.Client satisfies HTTPClient, and
-// NewHTTPClient builds a plain client for environments that do not have a node.Host yet.
+// list, and users or distributions may replace it. The HTTP client is injected through
+// Config.HTTP. NewHTTPClient and StartupConfig build the production client: uTLS with the
+// Chrome ClientHello and, in anonymous mode, the node's SOCKS5 proxy (T11.6a). The
+// products (efv2, the desktop facade, mobile, the server node) pass that client at start,
+// so the CDN check is not left off with ErrNoHTTPClient (D36, PA-FIX-4).
 //
 // When the applied offset exceeds 60 s the clock reports a user-facing warning through
 // Config.Warn. A large offset warns once; the warning is re-armed after the offset comes
