@@ -101,6 +101,18 @@ func (c *Config) hasCamouflaged() bool {
 	return c.InviteListen != nil && camouflaged(c.InviteListen.Suite)
 }
 
+// hasReality2 reports whether the node serves reality2 and therefore needs a certificate for the
+// cover. ws2 terminates TLS at the CDN, so it alone does not.
+func (c *Config) hasReality2() bool {
+	check := func(l ListenSpec) bool { return l.Suite == "reality2-quic" || l.Suite == "reality2-tcp" }
+	for _, l := range c.Listen {
+		if check(l) {
+			return true
+		}
+	}
+	return c.InviteListen != nil && check(*c.InviteListen)
+}
+
 // DefaultConfig is a server with the default roles and the operator API on loopback. It has no
 // listener: the operator must say where the node is reachable.
 func DefaultConfig() Config {
@@ -233,8 +245,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	// An empty cover_cert means ACME (T2.6e, T12.5). Accepting the CA's terms is the operator's
-	// act, never the code's: without it the operator must provide a certificate.
-	if c.Cover != "" && c.CoverCert == "" && (c.CoverACME == nil || !c.CoverACME.AcceptTOS) {
+	// act, never the code's: without it the operator must provide a certificate. ws2 alone needs
+	// none: its inner TLS lives inside the WebSocket and the CDN holds the outer certificate.
+	if c.hasReality2() && c.CoverCert == "" && (c.CoverACME == nil || !c.CoverACME.AcceptTOS) {
 		return bad("cover %q: cover_cert is empty and the CA terms are not accepted; set cover_acme.accept_tos or provide cover_cert", c.Cover)
 	}
 	// НС-3 (T2.6e): only the node's own cover is served. A camouflaged listener without a cover,

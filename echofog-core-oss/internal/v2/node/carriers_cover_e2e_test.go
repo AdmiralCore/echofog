@@ -34,16 +34,24 @@ import (
 
 const coverDomain = "cover.test"
 
-// freeBothPort returns a port free for TCP and UDP on loopback.
+// freeBothPort returns a port free for TCP and UDP on loopback. The scan is deterministic so a
+// run does not pick a port an earlier test still holds.
 func freeBothPort(t *testing.T) int {
 	t.Helper()
-	for i := 0; i < 20; i++ {
-		p := freeTCPPort(t)
-		pc, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)))
-		if err == nil {
-			_ = pc.Close()
-			return p
+	for p := 20000; p < 40000; p++ {
+		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(p))
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
 		}
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			_ = ln.Close()
+			continue
+		}
+		_ = pc.Close()
+		_ = ln.Close()
+		return p
 	}
 	t.Fatal("no port free for both TCP and UDP")
 	return 0
