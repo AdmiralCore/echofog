@@ -158,6 +158,10 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function CheckBootstrapNode(arg1) {
+  return window['go']['main']['App']['CheckBootstrapNode'](arg1);
+}
+
 export function CheckProxy(arg1) {
   return window['go']['main']['App']['CheckProxy'](arg1);
 }
@@ -728,6 +732,10 @@ export function SetAutoPay(arg1, arg2, arg3) {
 
 export function SetAutostart(arg1) {
   return window['go']['main']['App']['SetAutostart'](arg1);
+}
+
+export function SetBootstrapNodeEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetBootstrapNodeEnabled'](arg1, arg2);
 }
 
 export function SetCallBackdrop(arg1) {

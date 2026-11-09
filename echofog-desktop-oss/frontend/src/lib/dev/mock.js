@@ -37,7 +37,7 @@ function logsMock() {
   });
 }
 const OFFLINE = new URLSearchParams(location.search).has('offline');
-const bootMock = { builtIn: OFFLINE ? [{ addr: 'seed1.echofog.example:443', peerId: hex(9), link: '', connected: false }] : [], custom: [] };
+const bootMock = { builtIn: OFFLINE ? [{ index: 1, builtin: true, enabled: true, addr: 'seed1.echofog.example:443', peerId: hex(9), link: '', connected: false, kind: 'addr' }] : [], custom: [], protocol: 2 };
 const min = 60 * 1000;
 
 // --- event bus (window.runtime) ---------------------------------------------------------------
@@ -608,6 +608,13 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
     return null;
   },
   RemoveBootstrapNode: (entry) => { bootMock.custom = bootMock.custom.filter((n) => !entry.toLowerCase().endsWith(n.peerId)); return null; },
+  SetBootstrapNodeEnabled: (index, on) => {
+    const n = bootMock.builtIn.find((x) => x.index === index);
+    if (!n) throw new Error('no such entry node');
+    n.enabled = !!on;
+    return null;
+  },
+  CheckBootstrapNode: async (entry) => !!entry && !entry.includes('unreachable'),
   GetSettings: () => ({ ...settingsMock }),
   SetSettings: (v) => { if (v.socketBufferMb < 1 || v.socketBufferMb > 256) throw new Error('socket buffer must be between 1 and 256 MB'); Object.assign(settingsMock, v); return null; },
   AddContactByKey: (key, alias) => {

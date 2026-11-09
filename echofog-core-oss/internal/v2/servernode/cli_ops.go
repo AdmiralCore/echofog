@@ -250,6 +250,9 @@ func cmdStatus(args []string, env func(string) string, out io.Writer) error {
 			fmt.Fprint(out, "\x1b[H\x1b[2J")
 		}
 		fmt.Fprintln(out, RenderStatusPanel(st, upd, updateErr, lang, width, color))
+		if st.ListEntry != "" {
+			fmt.Fprintln(out, tr(lang, "строка для списка узлов входа:", "bootstrap list entry: "), st.ListEntry)
+		}
 		return nil
 	}
 	if !*watch {

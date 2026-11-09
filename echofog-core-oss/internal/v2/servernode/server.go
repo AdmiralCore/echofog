@@ -21,12 +21,14 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
 
 	"github.com/echofog/echofog-core/internal/v2/access"
+	"github.com/echofog/echofog-core/internal/v2/bootstrap"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
 	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
@@ -845,6 +847,9 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.rt.Start(ctx); err != nil {
 		return err
 	}
+	if len(s.cfg.Bootstrap) > 0 {
+		s.dialBootstrap(ctx)
+	}
 	ln, err := net.Listen("tcp", s.cfg.Operator.Addr)
 	if err != nil {
 		return fmt.Errorf("operator API: %w", err)
@@ -862,6 +867,23 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	go func() { _ = srv.Serve(ln) }()
 	return nil
+}
+
+// dialBootstrap joins the network through the operator's entry list (T5.6) once, in the
+// background. A list that does not parse is refused as a whole; only counts are logged.
+func (s *Server) dialBootstrap(ctx context.Context) {
+	entries, err := bootstrap.Parse(strings.Join(s.cfg.Bootstrap, "\n"), s.rt.Clock().Now())
+	if err != nil {
+		s.log.Warn("bootstrap: the list is not usable", "err", err)
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+	go func() {
+		rep := bootstrap.New(s.rt, entries, s.rt.Clock().Now).Log(s.log).Run(ctx)
+		s.log.Info("bootstrap finished", "entries", len(entries), "joined", rep.Joined, "failed", rep.Failed)
+	}()
 }
 
 // OperatorAddr is the address the operator API listens on.
@@ -961,6 +983,7 @@ func (s *Server) Status() StatusInfo {
 		// operator shows on the site and in "v2 status".
 		if link, lerr := objects.EncodeLink(ic.Envelope, nil); lerr == nil {
 			st.PublicLink = link
+			st.ListEntry = link
 		}
 	}
 	s.mu.Lock()

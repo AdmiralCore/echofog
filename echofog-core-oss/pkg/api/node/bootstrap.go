@@ -16,6 +16,13 @@ type BootstrapNode struct {
 	PeerID    string `json:"peerId"` // 64 hex
 	Link      string `json:"link"`   // echofog://relay/… form, for sharing
 	Connected bool   `json:"connected"`
+	// Builtin marks an entry of the signed official list; Index is its 1-based number there.
+	Builtin bool `json:"builtin,omitempty"`
+	Index   int  `json:"index,omitempty"`
+	// Enabled is false when the user switched a built-in entry off; a custom entry is always on.
+	Enabled bool `json:"enabled"`
+	// Kind is "card", "device" or "addr" for a v2 entry.
+	Kind string `json:"kind,omitempty"`
 }
 
 // BootstrapStatus lists the nodes built into this release and the ones the user added. When the
@@ -25,6 +32,11 @@ type BootstrapStatus struct {
 	BuiltIn []BootstrapNode `json:"builtIn"`
 	Custom  []BootstrapNode `json:"custom"`
 	Peers   int             `json:"peers"` // peers connected right now
+	// Protocol is 1 or 2: the v2 screen can toggle the built-in entries and check a node.
+	Protocol int `json:"protocol,omitempty"`
+	// Seq and Expires are the signed official list's sequence and term (Unix seconds), v2 only.
+	Seq     uint64 `json:"seq,omitempty"`
+	Expires int64  `json:"expires,omitempty"`
 }
 
 // normalizeBootstrap parses each entry (a relay link or host:port/<peer id>) into its canonical
@@ -75,6 +87,7 @@ func (n *NodeApi) bootstrapNode(entry string) BootstrapNode {
 	return BootstrapNode{
 		Addr: a, PeerID: id.String(), Link: MakeRelayLink(entry),
 		Connected: n.node.Swarm != nil && n.node.Swarm.GetPeer(id) != nil,
+		Enabled:   true,
 	}
 }
 
@@ -88,7 +101,7 @@ func (n *v1NetBackend) GetBootstrapNodes() (BootstrapStatus, error) {
 	builtIn := append([]string(nil), n.bootstrapBuiltIn...)
 	settingsMu.Unlock()
 
-	st := BootstrapStatus{BuiltIn: []BootstrapNode{}, Custom: []BootstrapNode{}}
+	st := BootstrapStatus{BuiltIn: []BootstrapNode{}, Custom: []BootstrapNode{}, Protocol: 1}
 	for _, b := range custom {
 		st.Custom = append(st.Custom, n.bootstrapNode(b))
 	}
