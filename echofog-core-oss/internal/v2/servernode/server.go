@@ -678,7 +678,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 			}
 			src := node.Reality2Listener{
 				Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
-				OnCert: s.onCoverCert,
+				OnCert: s.onCoverCert, OnWarn: s.onCoverWarn,
 				CertKV: st.Store("v2/reality2/self/cert"), ReplayKV: st.Store("v2/reality2/replay"),
 				TCPAddr: tcpBind, UDPAddr: udpBind,
 				Masks: []reality2.MaskKey{mk}, Addrs: []string{tokenAddr(l)},
@@ -694,6 +694,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 				Addr: l.Bind, Path: path, Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir,
 				Masks: []reality2.MaskKey{mk}, Addrs: []string{ws2TokenAddr(cfg.Cover)},
 				ReplayKV: st.Store("v2/ws2/replay"), Shape: tlsShape, LowPower: profile.LowPower,
+				OnWarn: s.onCoverWarn,
 			})
 		}
 	}
@@ -746,7 +747,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 			case "reality2-quic", "reality2-tcp":
 				src := node.Reality2Listener{
 					Domain: coverHost(cfg.Cover), SiteDir: cfg.SiteDir, Cert: coverCert, ACME: acme,
-					OnCert: s.onCoverCert,
+					OnCert: s.onCoverCert, OnWarn: s.onCoverWarn,
 					CertKV: st.Store("v2/reality2/self/access/" + strconv.Itoa(slot)), ReplayKV: replayKV,
 					Masks: masks, Addrs: []string{advertise}, Shape: tlsShape, LowPower: profile.LowPower,
 				}
@@ -771,6 +772,14 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	s.rt = rt
 	ok = true
 	return s, nil
+}
+
+// onCoverWarn keeps a non-fatal cover finding for the operator status and the log.
+func (s *Server) onCoverWarn(message string) {
+	s.mu.Lock()
+	s.warnings["cover"] = "cover: " + message
+	s.mu.Unlock()
+	s.log.Warn("cover", "message", message)
 }
 
 // onCoverCert keeps the certificate the cover serves so the status and the doctor report its term.

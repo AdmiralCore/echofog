@@ -79,6 +79,7 @@ var messages = map[string]msg{
 	"doctor.version":            {"Версия: %s.", "Version: %s."},
 	"doctor.cover.none":         {"Обложка не задана: у ноды нет публичной карточки, она обслуживает только своих.", "No cover is set: the node has no public card and serves only its own people."},
 	"doctor.cover.ok":           {"Обложка %s обслуживается из папки %s.", "The cover %s is served from the folder %s."},
+	"doctor.cover.empty":        {"В папке сайта обложки %s нет index.html: зонд увидит 404. Нужно положить настоящий сайт.", "The cover site folder %s has no index.html: a prober sees a 404. Put the real site there."},
 	"doctor.cover.missing":      {"Замаскированный носитель настроен без cover: незнакомцу нечего показать. Нужно задать cover и site_dir.", "A camouflaged listener is configured without a cover: there is nothing to show a stranger. Set cover and site_dir."},
 	"doctor.cover.site-missing": {"Обложка %s задана без site_dir. Пока нет T2.6b-3, чужой сайт не раздаётся: нужен собственный сайт оператора (site_dir).", "The cover %s is set without site_dir. Until T2.6b-3 a foreign site is not served: the operator's own site (site_dir) is required."},
 	"doctor.summary.ok":         {"Проблем не найдено.", "No problems found."},

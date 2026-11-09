@@ -152,6 +152,8 @@ type WS2Listener struct {
 	Delay func() time.Duration
 	// Now is the injectable clock; nil means time.Now.
 	Now func() time.Time
+	// OnWarn receives the non-fatal findings of the cover (an empty site folder).
+	OnWarn func(string)
 }
 
 // Listen implements ListenerSource.
@@ -182,9 +184,14 @@ func (w WS2Listener) Listen(ctx context.Context) (carrier.Listener, error) {
 		if w.SiteDir == "" {
 			return nil, fmt.Errorf("node: ws2 listener: the cover site folder is required")
 		}
-		h, _, err := selfcover.Content{Dir: w.SiteDir}.Handler()
+		h, warnings, err := selfcover.Content{Dir: w.SiteDir}.Handler()
 		if err != nil {
 			return nil, fmt.Errorf("node: ws2 listener: %w", err)
+		}
+		if w.OnWarn != nil {
+			for _, warning := range warnings {
+				w.OnWarn(warning)
+			}
 		}
 		site = h
 	}

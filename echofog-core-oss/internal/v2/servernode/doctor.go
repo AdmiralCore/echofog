@@ -133,7 +133,7 @@ func RunDoctor(ctx context.Context, d DoctorDeps) []CheckResult {
 		add("config", LevelOK, "config.ok")
 	}
 
-	if loose := looseFiles(d.DataDir); len(loose) > 0 {
+	if loose := looseFiles(d.DataDir, cfg); len(loose) > 0 {
 		add("files", LevelWarn, "files.loose", strings.Join(loose, ", "))
 	} else {
 		add("files", LevelOK, "files.ok")
@@ -200,7 +200,11 @@ func RunDoctor(ctx context.Context, d DoctorDeps) []CheckResult {
 		case cfg.Cover == "":
 			add("cover", LevelInfo, "cover.none")
 		default:
-			add("cover", LevelOK, "cover.ok", cfg.Cover, cfg.SiteDir)
+			if _, err := os.Stat(filepath.Join(cfg.SiteDir, "index.html")); err != nil {
+				add("cover", LevelWarn, "cover.empty", cfg.SiteDir)
+			} else {
+				add("cover", LevelOK, "cover.ok", cfg.Cover, cfg.SiteDir)
+			}
 		}
 	}
 
@@ -262,7 +266,7 @@ func shortErr(err error) string {
 	return s
 }
 
-func looseFiles(dir string) []string {
+func looseFiles(dir string, cfg *Config) []string {
 	if os.PathSeparator != '/' {
 		return nil // file modes mean nothing on Windows
 	}
@@ -270,9 +274,13 @@ func looseFiles(dir string) []string {
 	if fi, err := os.Stat(dir); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		out = append(out, filepath.Base(dir))
 	}
-	for _, name := range []string{identityFileName, configFileName, tokenFileName} {
-		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && fi.Mode().Perm()&0o077 != 0 {
-			out = append(out, name)
+	files := []string{filepath.Join(dir, identityFileName), filepath.Join(dir, configFileName), filepath.Join(dir, tokenFileName)}
+	if cfg != nil && cfg.CoverCert != "" {
+		files = append(files, cfg.CoverCert) // the bundle holds the private key of the cover
+	}
+	for _, p := range files {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			out = append(out, filepath.Base(p))
 		}
 	}
 	return out
