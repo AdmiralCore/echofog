@@ -27,6 +27,9 @@ const (
 	wrapperTTL = 30 * time.Second
 	maxCache   = 4096
 	maxJoined  = 4096
+	// maxWrapperBytes bounds what the remembered wrappers may hold: a SIGNAL frame is at most
+	// 64 KiB, and a count-only limit would let a peer hold hundreds of megabytes.
+	maxWrapperBytes = 8 << 20
 )
 
 // Service is the part of *call.Service the bridge uses.
@@ -56,6 +59,7 @@ type Bridge struct {
 	mu      sync.Mutex
 	wrapper map[wkey]wentry
 	order   []wkey
+	bytes   int
 	joined  map[pair]struct{}
 	jorder  []pair
 }
@@ -86,15 +90,16 @@ func New(cfg Config) *Bridge {
 	return &Bridge{cfg: cfg, wrapper: map[wkey]wentry{}, joined: map[pair]struct{}{}}
 }
 
-// SendSignal sends a v1 envelope the call layer produced to a neighbour. lossy copies are skipped:
-// call/2 duplicates lossy signals on CALL_SIGNAL itself when it sends the reliable one.
+// SendSignal sends a v1 envelope the call layer produced to a neighbour. A lossy copy is skipped
+// when the call layer also sends that signal reliably: call/2 duplicates it on CALL_SIGNAL itself.
+// A viewer's path feedback travels only on the lossy copy, so that one must go on.
 func (b *Bridge) SendSignal(to [32]byte, lossy bool, payload []byte) error {
-	if lossy {
-		return nil
-	}
 	m, err := v1sig.ToPB(payload)
 	if err != nil {
 		return err
+	}
+	if lossy && m.Action != pb.Action_ACTION_STREAM_FEEDBACK {
+		return nil
 	}
 	peer := call.Peer{Device: to}
 	if !bytes.Equal(m.Sender, b.cfg.Self[:]) {
@@ -124,17 +129,36 @@ func (b *Bridge) wrapperOf(k wkey) ([]byte, bool) {
 }
 
 func (b *Bridge) remember(k wkey, raw []byte) {
+	if len(raw) > maxWrapperBytes {
+		return // one wrapper never fits: it can only be signed again, and the bridge never signs
+	}
 	now := b.cfg.Now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.wrapper[k]; ok {
+	if e, ok := b.wrapper[k]; ok {
+		// A stalled path can carry the same signal again long after the first copy: keeping the
+		// arrival time fresh, and the wrapper as the newest, is what lets the forward that follows
+		// still find it instead of evicting the signal that is still in use.
+		e.at = now
+		b.wrapper[k] = e
+		for i, key := range b.order {
+			if key == k {
+				b.order = append(b.order[:i], b.order[i+1:]...)
+				break
+			}
+		}
+		b.order = append(b.order, k)
 		return
 	}
-	for len(b.order) > 0 && (len(b.order) >= maxCache || now.Sub(b.wrapper[b.order[0]].at) > wrapperTTL) {
+	for len(b.order) > 0 &&
+		(len(b.order) >= maxCache || b.bytes+len(raw) > maxWrapperBytes || now.Sub(b.wrapper[b.order[0]].at) > wrapperTTL) {
+		e := b.wrapper[b.order[0]]
+		b.bytes -= len(e.raw)
 		delete(b.wrapper, b.order[0])
 		b.order = b.order[1:]
 	}
 	b.wrapper[k] = wentry{raw: append([]byte(nil), raw...), at: now}
+	b.bytes += len(raw)
 	b.order = append(b.order, k)
 }
 

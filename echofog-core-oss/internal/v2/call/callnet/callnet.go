@@ -25,6 +25,10 @@ import (
 // path, wire.md 6.5). A larger frame is refused with transport.ErrDatagramTooLarge.
 const MaxDatagram = 1232
 
+// DatagramFloor tells the call layer what one datagram carries on this transport (the v2 floor,
+// not the v1 1242-byte budget): media seals its fragments to fit instead of losing full ones.
+func (t *Transport) DatagramFloor() int { return MaxDatagram }
+
 var (
 	// ErrNoLink: no live session with the participant.
 	ErrNoLink = errors.New("callnet: no session with the peer")
@@ -69,6 +73,12 @@ const maxSources = 1024
 // Stats counts what Deliver dropped and what could not be sent.
 type Stats struct {
 	DroppedRoute, DroppedAdmit, DroppedUnknown, DroppedRate, SendNoPath uint64
+	// SignalRefused counts signals the signal port refused, SignalReasons says why (a stable name
+	// per reason), and LastSignalError keeps the last error text: a refused path report is not a
+	// silent loss.
+	SignalRefused   uint64
+	SignalReasons   map[string]uint64
+	LastSignalError string
 }
 
 // Transport is the call layer's transport over v2 sessions.
@@ -159,9 +169,28 @@ func (t *Transport) SendUnreliableFrame(peer types.PeerID, kind transport.Kind, 
 
 func (t *Transport) signal(peer types.PeerID, lossy bool, payload []byte) error {
 	if t.cfg.Signals == nil {
-		return errors.New("callnet: no signal port")
+		err := errors.New("callnet: no signal port")
+		t.refuseSignal("no-port", err)
+		return err
 	}
-	return t.cfg.Signals.SendSignal(peer, lossy, payload)
+	if err := t.cfg.Signals.SendSignal(peer, lossy, payload); err != nil {
+		t.refuseSignal("port", err)
+		return err
+	}
+	return nil
+}
+
+// refuseSignal keeps why a signal did not leave: a refused path report would otherwise be a
+// silent loss, and the broadcaster would never learn the viewer's path is full.
+func (t *Transport) refuseSignal(reason string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.stats.SignalRefused++
+	if t.stats.SignalReasons == nil {
+		t.stats.SignalReasons = map[string]uint64{}
+	}
+	t.stats.SignalReasons[reason]++
+	t.stats.LastSignalError = err.Error()
 }
 
 // RegisterFastFrameHandler sets the handler of one kind of inbound frame.
@@ -269,15 +298,25 @@ func (t *Transport) DeliverSignal(from [32]byte, v1 []byte) {
 	}
 }
 
-// Relayed reports whether the participant is reached only through a relay, so the call layer
-// stretches its watchdogs for the extra hop. Under call_route=direct a relay path carries no
-// media, so the peer is not "relayed".
+// Relayed reports whether the participant is reached through a relay, so the call layer stretches
+// its watchdogs for the extra hop. Under call_route=relay media takes the relay path even when a
+// direct session exists (the signalling stream is usually direct): such a peer is relayed too.
+// A peer with no relay path is not: media cannot go to it at all. Under call_route=direct a relay
+// path carries no media, so the peer is not "relayed"; under Auto it is only when that is the only
+// path.
 func (t *Transport) Relayed(peer types.PeerID) bool {
 	l, ok := t.cfg.Links.Link(peer)
-	if !ok || t.route() == route.Direct {
+	if !ok {
 		return false
 	}
-	return route.OnlyRelayed(l.PathKinds())
+	kinds := l.PathKinds()
+	switch t.route() {
+	case route.Direct:
+		return false
+	case route.Relay:
+		return kinds[mux.PathRelay] > 0
+	}
+	return route.OnlyRelayed(kinds)
 }
 
 // DirectLink reports whether the call layer should not ask for a connection to the peer. Under
@@ -299,5 +338,12 @@ func (t *Transport) DirectLink(peer types.PeerID) bool {
 func (t *Transport) Stats() Stats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.stats
+	s := t.stats
+	if len(s.SignalReasons) > 0 {
+		s.SignalReasons = make(map[string]uint64, len(t.stats.SignalReasons))
+		for k, v := range t.stats.SignalReasons {
+			s.SignalReasons[k] = v
+		}
+	}
+	return s
 }

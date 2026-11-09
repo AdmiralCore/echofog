@@ -26,6 +26,11 @@ const (
 	// signal still travels on the reliable stream.
 	MaxDatagramSignal = 1200
 
+	// DefaultMaxSignalsPerSecond bounds the signals accepted from one device before they are
+	// parsed and verified: a busy room sends tens of them a second, while a flood would otherwise
+	// spend a core on signatures. Zero in Config means this.
+	DefaultMaxSignalsPerSecond = 2000
+
 	// dedupeTTL and dedupeMax bound the memory of seen (sender, msg_id) pairs. The same signal
 	// may arrive twice: on the stream and on CALL_SIGNAL.
 	dedupeTTL = 30 * time.Second
@@ -84,6 +89,9 @@ type Config struct {
 	After func(time.Duration) <-chan time.Time
 	// RequestTimeout is the timeout of one request-like signal. Zero means the 2 s default.
 	RequestTimeout time.Duration
+	// MaxSignalsPerSecond bounds the signals accepted from one device before parsing and
+	// verification. Zero means DefaultMaxSignalsPerSecond.
+	MaxSignalsPerSecond int
 	// Rand returns message IDs; nil means math/rand/v2.
 	Rand func() uint64
 	// OnSignal receives every verified, non-duplicate signal. A signal that answers a Request
@@ -107,7 +115,22 @@ type Service struct {
 	seenMu    sync.Mutex
 	seen      map[dedupeKey]time.Time
 	seenOrder []dedupeEntry // insertion order: the oldest first
+
+	rateMu sync.Mutex
+	rate   map[[32]byte]*signalBucket
+
+	rateLimited atomic.Uint64
+	selfSignals atomic.Uint64
 }
+
+// signalBucket is a token bucket of the signals accepted from one device.
+type signalBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// maxSignalSources bounds the per-device buckets kept.
+const maxSignalSources = 1024
 
 type dedupeEntry struct {
 	key dedupeKey
@@ -128,6 +151,58 @@ type link struct {
 	pending map[uint64]chan *pb.CallSignal
 
 	openMu sync.Mutex
+}
+
+// ServiceStats counts what the service refused before it parsed it, and the signals that came
+// back as its own. A refusal reason is kept here, so a dropped path report is not a silent loss.
+type ServiceStats struct {
+	SignalsRateLimited uint64
+	SignalsSelf        uint64
+}
+
+// Stats returns the counters.
+func (s *Service) Stats() ServiceStats {
+	return ServiceStats{
+		SignalsRateLimited: s.rateLimited.Load(),
+		SignalsSelf:        s.selfSignals.Load(),
+	}
+}
+
+// admitSignal takes one token from the device's budget. The bucket is bounded, and a bucket of a
+// device that went quiet is forgotten rather than shared.
+func (s *Service) admitSignal(device [32]byte) bool {
+	limit := float64(s.cfg.MaxSignalsPerSecond)
+	if limit <= 0 {
+		limit = DefaultMaxSignalsPerSecond
+	}
+	at := s.cfg.Now()
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	b := s.rate[device]
+	if b == nil {
+		if len(s.rate) >= maxSignalSources {
+			var oldest [32]byte
+			var oldestAt time.Time
+			first := true
+			for d, x := range s.rate {
+				if first || x.at.Before(oldestAt) {
+					oldest, oldestAt, first = d, x.at, false
+				}
+			}
+			delete(s.rate, oldest)
+		}
+		b = &signalBucket{tokens: limit, at: at}
+		s.rate[device] = b
+	}
+	if el := at.Sub(b.at); el > 0 {
+		b.tokens = min(limit, b.tokens+limit*el.Seconds())
+		b.at = at
+	}
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
 }
 
 // New returns a call signalling service.
@@ -167,6 +242,7 @@ func New(cfg Config) (*Service, error) {
 		cancel: cancel,
 		links:  map[[32]byte]*link{},
 		seen:   map[dedupeKey]time.Time{},
+		rate:   map[[32]byte]*signalBucket{},
 	}, nil
 }
 
@@ -213,8 +289,17 @@ func (s *Service) serve(ctx context.Context, p Peer, st Stream) {
 
 // Process verifies one SIGNAL wrapper and delivers it. It is used by the stream handler and by
 // the CALL_SIGNAL datagram loop; a bad signature, a wrong sender, an unknown action and a
-// duplicate are dropped with an error, never delivered.
+// duplicate are dropped with an error, never delivered. The per-device budget is taken first, so a
+// flood costs no parsing and no signature checks.
 func (s *Service) Process(ctx context.Context, p Peer, raw []byte) error {
+	// A datagram of our own device that came back on a loop is not a foreign peer: it is counted
+	// apart and spends no budget of another device.
+	if p.Device == s.cfg.Origin.ID() {
+		s.selfSignals.Add(1)
+	} else if !s.admitSignal(p.Device) {
+		s.rateLimited.Add(1)
+		return ErrRateLimited
+	}
 	sig, err := Parse(raw)
 	if err != nil {
 		return err
@@ -260,9 +345,10 @@ func (s *Service) Send(ctx context.Context, p Peer, m *pb.CallSignal) error {
 			m.MsgId = 1
 		}
 	}
-	if m.Timestamp == 0 {
-		m.Timestamp = s.cfg.Now().UnixMilli()
-	}
+	// This is a self-originated signal: it carries the corrected clock (AD13), never the device's
+	// raw one. A receiver's JoinGuard grades freshness by the corrected clock; a raw timestamp
+	// minutes off looked stale and its join was refused.
+	m.Timestamp = s.cfg.Now().UnixMilli()
 	var origin keys.AKey
 	var sign func([]byte) ([]byte, error)
 	if IsForwarded(m.Action) {

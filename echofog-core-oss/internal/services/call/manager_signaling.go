@@ -276,6 +276,9 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 		return true
 
 	case signaling.ActionVADState:
+		if _, member := room.ConnectedPeers[env.Sender]; !member {
+			return m.rejectLocked(room, env, "speaker is not a member of the call", true)
+		}
 		var vad signaling.VADPayload
 		if decodePayload(env.Payload, &vad) != nil || vad.Speaker != env.Sender {
 			return m.rejectLocked(room, env, "malformed or about another speaker", true)
@@ -288,9 +291,30 @@ func (m *CallManager) applyFloodLocked(room *ActiveRoomState, env *signaling.Cal
 	return m.rejectLocked(room, env, "unknown flooded action", false)
 }
 
+// memberOnly lists the unicast actions that change what everyone in the call sees: only a
+// connected member may send them. Their payload names the sender as its subject, so the spoof
+// check says the envelope came from that device, not that the device is in the call.
+func memberOnly(a signaling.SignalAction) bool {
+	switch a {
+	case signaling.ActionParentLost, signaling.ActionStreamRegister, signaling.ActionStreamUnregister,
+		signaling.ActionStreamSubscribe, signaling.ActionStreamUnsub, signaling.ActionStreamReparent,
+		signaling.ActionPing:
+		return true
+	}
+	return false
+}
+
 func (m *CallManager) applyUnicastLocked(room *ActiveRoomState, env *signaling.CallSignalEnvelope) {
 	now := m.now()
 	sender := env.Sender
+	if memberOnly(env.Action) {
+		if _, member := room.ConnectedPeers[sender]; !member {
+			// A signature proves the device sent it, not that it is in this call: a former member
+			// or an invite holder with a session and the call ID must not restructure the tree.
+			m.rejectLocked(room, env, "sender is not a member of the call", true)
+			return
+		}
+	}
 	switch env.Action {
 	case signaling.ActionJoin, signaling.ActionMemberHeartbeat:
 		if !room.IsCoordinator {

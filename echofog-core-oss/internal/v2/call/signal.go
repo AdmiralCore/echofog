@@ -85,6 +85,7 @@ var (
 	ErrNoTransport         = errors.New("call: no call transport")
 	ErrNoDatagrams         = errors.New("call: no datagram port")
 	ErrDuplicate           = errors.New("call: duplicate signal")
+	ErrRateLimited         = errors.New("call: signal rate limited")
 	ErrTimeout             = errors.New("call: signal request timed out")
 	ErrClosed              = errors.New("call: service closed")
 )
