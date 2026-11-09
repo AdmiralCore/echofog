@@ -32,6 +32,13 @@ type replayCache struct {
 	kv        KV
 	nextFlush time.Time
 	rnd       *mrand.Rand
+	// persisting is true while a KV write is in flight and mu is released. A flush that arrives
+	// in that window is folded into the write in flight via again, so two writers never race on
+	// the same generation.
+	persisting bool
+	again      bool
+	// writeDone wakes a blocking flush once the write in flight has finished.
+	writeDone *sync.Cond
 	// onError receives persistence errors; nil logs them. A failed write keeps the generation
 	// dirty so the next flush retries it and a restart does not reopen the replay window.
 	onError func(error)
@@ -39,6 +46,7 @@ type replayCache struct {
 
 func newReplayCache(kv KV, now time.Time, rnd *mrand.Rand) *replayCache {
 	r := &replayCache{set: &bloomSet{lastRotate: now}, kv: kv, rnd: rnd}
+	r.writeDone = sync.NewCond(&r.mu)
 	r.nextFlush = now.Add(r.drawFlush())
 	if kv != nil {
 		r.load(now)
@@ -109,43 +117,78 @@ func (r *replayCache) flush(now time.Time) {
 		r.mu.Unlock()
 		return
 	}
+	// Shutdown must persist synchronously: wait for a write started by the sweep timer, then run
+	// one more pass over anything that changed meanwhile.
+	for r.persisting {
+		r.writeDone.Wait()
+	}
 	r.persistLocked()
 }
 
 // persistLocked writes only the changed generations, then the rotation state, and releases the
-// lock before the KV calls. A nothing-changed filter writes nothing (the idle case). A generation
-// is marked clean only after its PutTTL succeeded: on error it stays dirty, the next flush retries
-// it, and a restart cannot silently reopen the replay window.
+// lock before the KV calls. A nothing-changed filter writes nothing (the idle case).
+//
+// Each snapshot records the generation version. Once the write returns, dirty is cleared only if
+// the version is unchanged: a concurrent seen or rotate in the window has already made the
+// snapshot stale, so the generation stays dirty and a later pass writes the newer bits. Thus a
+// selector added while PutTTL is in flight is never declared persisted. A failed PutTTL leaves
+// the generation dirty for the next flush and is reported, so a restart cannot silently reopen
+// the replay window.
+//
+// Only one write may be in flight at a time. A flush that arrives meanwhile sets again and the
+// writer makes another pass after it finishes, so an older snapshot can never overwrite a newer
+// one and a deferred change is not lost.
 func (r *replayCache) persistLocked() {
-	if !r.set.anyDirty() {
-		r.mu.Unlock()
-		return
-	}
-	type part struct {
-		gen  int
-		key  []byte
-		data []byte
-	}
-	var parts []part
-	for i := range r.set.gens {
-		if g := &r.set.gens[i]; g.dirty {
-			parts = append(parts, part{gen: i, key: genKey(i), data: g.marshal()})
+	for {
+		if r.persisting {
+			r.again = true
+			r.mu.Unlock()
+			return
 		}
-	}
-	meta := r.set.metaMarshal()
-	kv := r.kv
-	r.mu.Unlock()
-	for _, p := range parts {
-		if err := kv.PutTTL(p.key, p.data, replayTTL); err != nil {
+		if !r.set.anyDirty() {
+			r.mu.Unlock()
+			return
+		}
+		type part struct {
+			gen  int
+			key  []byte
+			data []byte
+			ver  uint64
+		}
+		var parts []part
+		for i := range r.set.gens {
+			if g := &r.set.gens[i]; g.dirty {
+				parts = append(parts, part{gen: i, key: genKey(i), data: g.marshal(), ver: g.ver})
+			}
+		}
+		meta := r.set.metaMarshal()
+		kv := r.kv
+		r.persisting = true
+		r.mu.Unlock()
+		for _, p := range parts {
+			if err := kv.PutTTL(p.key, p.data, replayTTL); err != nil {
+				r.report(err)
+				continue
+			}
+			r.mu.Lock()
+			if g := &r.set.gens[p.gen]; g.ver == p.ver {
+				g.dirty = false
+			} else {
+				g.dirty = true
+			}
+			r.mu.Unlock()
+		}
+		if err := kv.PutTTL([]byte(bloomKey), meta, replayTTL); err != nil {
 			r.report(err)
-			continue
 		}
 		r.mu.Lock()
-		r.set.gens[p.gen].dirty = false
-		r.mu.Unlock()
-	}
-	if err := kv.PutTTL([]byte(bloomKey), meta, replayTTL); err != nil {
-		r.report(err)
+		r.persisting = false
+		r.writeDone.Broadcast()
+		if !r.again {
+			r.mu.Unlock()
+			return
+		}
+		r.again = false
 	}
 }
 
