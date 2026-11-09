@@ -27,6 +27,9 @@ const (
 	wrapperTTL = 30 * time.Second
 	maxCache   = 4096
 	maxJoined  = 4096
+	// maxWrapperBytes bounds what the remembered wrappers may hold: a SIGNAL frame is at most
+	// 64 KiB, and a count-only limit would let a peer hold hundreds of megabytes.
+	maxWrapperBytes = 8 << 20
 )
 
 // Service is the part of *call.Service the bridge uses.
