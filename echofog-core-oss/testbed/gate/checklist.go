@@ -84,12 +84,12 @@ func checklist(res Result) []Item {
 	add("no detector flags more than 1 % of the browser control", fpr, "no browser control", true)
 	add("the controls are found (D1-D4, D10 recall 100 %, D5 at least 90 %)", controls, "no control flows", false)
 	var v2 []Row
-	for _, r := range by("D5", "D6", "D7", "D8") {
+	for _, r := range res.Rows {
 		if strings.HasPrefix(r.Metric, "v2") {
 			v2 = append(v2, r)
 		}
 	}
-	add("the v2 flows are not found: D5, D7, D8 flag at most 10 %, D6 AUC at most 0.65", v2, "no real v2 TCP flow in the run", false)
+	add("the v2 flows are not found: every detector flags at most 10 % of them, D6 AUC at most 0.65", v2, "no real v2 TCP flow in the run", false)
 	add("H1a: the exit records are as far from the browser as the browser is from itself", by("H1a"), "no exit flow", false)
 	add("no node answers a probe on its own outside the cover (D11-D15)", by("D11", "D12", "D13", "D14", "D15"), "no probe ran", false)
 	add("no regression against the signed baseline", by("regression"), "no baseline", false)

@@ -33,7 +33,9 @@ func goodRun(t *testing.T) *RunReport {
 	  {"detector":"D5","n":60,"flagged":1,"share":0.016,"measured":true,"pass":true},
 	  {"detector":"D6","n":60,"auc":0.52,"measured":true,"pass":true},
 	  {"detector":"D7","n":60,"flagged":2,"share":0.03,"measured":true,"pass":true},
-	  {"detector":"D8","n":60,"flagged":0,"share":0,"measured":true,"pass":true}]},
+	  {"detector":"D8","n":60,"flagged":0,"share":0,"measured":true,"pass":true},
+	  {"detector":"D4","n":60,"flagged":3,"share":0.05,"measured":true,"pass":true},
+	  {"detector":"D10","n":60,"flagged":0,"share":0,"measured":true,"pass":true}]},
 	 "h1a":{"ks":0.03,"threshold":0.06,"flows":60,"pass":true},
 	 "probes":[{"target":"ordinary","outcomes":[
 	  {"detector":"D11","case":"at once"},{"detector":"D12","case":"garbage"},{"detector":"D13","case":"page"},
@@ -164,6 +166,58 @@ func TestTheV2SideOfTheGate(t *testing.T) {
 	noGate.V2Gate, noGate.H1a = nil, nil
 	res = Evaluate(Input{Run: noGate, Now: now})
 	assert.Equal(t, NotMeasured, row(res, "H1a", "").Status)
+}
+
+// The gate reads the whole v2 side of H1a, not a fixed list of four detectors: a red D4 or D10 on
+// the real v2 flows blocks the release (the hole the T15.0f-2 acceptance found).
+func TestRedD4OrD10OnTheV2SideBlocks(t *testing.T) {
+	run := goodRun(t)
+	red := func(id string, n, flagged int) {
+		for i := range run.V2Gate.Rows {
+			if run.V2Gate.Rows[i].Detector == id {
+				run.V2Gate.Rows[i].N = n
+				run.V2Gate.Rows[i].Flagged = flagged
+				run.V2Gate.Rows[i].Share = float64(flagged) / float64(n)
+				run.V2Gate.Rows[i].Pass = false
+			}
+		}
+	}
+	red("D4", 27, 9)
+	red("D10", 18, 6)
+	res := Evaluate(Input{Run: run, Now: now})
+	assert.Equal(t, Red, row(res, "D4", "v2 share").Status)
+	assert.Equal(t, Red, row(res, "D10", "v2 share").Status)
+	assert.True(t, res.Blocks, "33 % of the v2 flows flagged by D4 and D10 blocks the release")
+	assert.Equal(t, Red, res.Verdict)
+	for _, r := range res.Rows {
+		if r.Status == Red {
+			assert.Contains(t, []string{"D4", "D10"}, r.ID, "only D4 and D10 are red: %s %s", r.ID, r.Metric)
+		}
+	}
+
+	green := Evaluate(Input{Run: goodRun(t), Now: now})
+	assert.Equal(t, Green, row(green, "D4", "v2 share").Status)
+	assert.Equal(t, Green, row(green, "D10", "v2 share").Status)
+	assert.False(t, green.Blocks, "a run inside every threshold blocks nothing")
+}
+
+// A report that predates the D4 and D10 rows says nothing about them: the gate calls that not
+// measured (exit 2 without -allow-unmeasured), never a silent pass. Blocks itself is unchanged,
+// so old reports keep the verdict they had.
+func TestAReportWithoutTheD4AndD10RowsIsNotASilentPass(t *testing.T) {
+	run := goodRun(t)
+	kept := run.V2Gate.Rows[:0]
+	for _, r := range run.V2Gate.Rows {
+		if r.Detector != "D4" && r.Detector != "D10" {
+			kept = append(kept, r)
+		}
+	}
+	run.V2Gate.Rows = kept
+	res := Evaluate(Input{Run: run, Now: now})
+	assert.Equal(t, NotMeasured, row(res, "D4", "v2 share").Status)
+	assert.Equal(t, NotMeasured, row(res, "D10", "v2 share").Status)
+	assert.False(t, res.Blocks, "a report that predates the rows does not turn red by itself")
+	assert.Equal(t, 2, ExitCode(res, false), "but the gate does not call it green")
 }
 
 func TestH1aAndTheProbes(t *testing.T) {
