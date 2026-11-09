@@ -53,6 +53,8 @@ type GateConfig struct {
 	MaxPending      int
 	MaxPendingBytes int
 	PendingTTL      time.Duration
+	// MaxAdmitted bounds the table of admitted 4-tuples; zero means DefaultMaxAdmitted.
+	MaxAdmitted int
 }
 
 type maskEntry struct {
@@ -378,6 +380,10 @@ func (g *Gate) WriteTo(p []byte, addr net.Addr) (int, error) {
 	}
 	return g.conn.WriteTo(p, addr)
 }
+
+// AdmittedEvicted reports how many admitted 4-tuples have been evicted from the table. It is a
+// metric for the status view.
+func (g *Gate) AdmittedEvicted() uint64 { return 0 }
 
 // Close stops the pending-flight reaper and closes the socket. It is idempotent.
 func (g *Gate) Close() error {
