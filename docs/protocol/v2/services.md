@@ -416,12 +416,17 @@ ever sent and no fixed-size or fixed-content packet appears.
   answers with one junk datagram (its peer may have stopped sending); the lower-ID side then sends
   Init from its hit socket.
 
+A datagram that only looks like one from the peer (a forged source) is still a hit, but the Init from
+the hit socket then fails the inner noise3 handshake. If the Init from the hit socket does not
+complete within 3 s, the attempt is considered failed.
+
 Once a flow completes its inner QUIC handshake, step 5 applies: PATH_BIND on stream 0, no new Noise
 handshake.
 
-**Limits.** Per attempt: punching phase 3 s, then the Init phase of step 4 within the 5 s of step 6;
-at most 960 punching datagrams in all from one node (an average of 320 per second with ±3 % jitter
-on absolute deadlines, so late wake-ups do not accumulate), of which spray at most 900; at most 256
+**Limits.** Per attempt: punching phase 3 s; then the Init after a hit gets its own 3 s, which runs
+from the hit and is not extended by the 5 s of step 6; at most 960 punching datagrams in all from one
+node, the answer junk of dial and mutual included (an average of 320 per second with ±3 % jitter on
+absolute deadlines, so late wake-ups do not accumulate), of which spray at most 900; at most 256
 sockets (64 in mutual); at most 2 birthday attempts running on a node at once. Attempts per session,
 retry delay and PUNCH_OFFER interval are those of step 6.
 

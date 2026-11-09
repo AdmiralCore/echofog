@@ -487,6 +487,15 @@ func (e *Engine) pickMode(answer frame.PunchOffer) Mode {
 
 func (e *Engine) lowerID() bool { return bytes.Compare(e.cfg.OwnID[:], e.cfg.PeerID[:]) < 0 }
 
+// initAfterHit wraps ctx with the deadline of the Init that follows a hit. The deadline runs from the
+// hit and is separate from the general AttemptTime of step 6 (services.md §6.4.1): a hit caused by a
+// spoofed datagram then fails within it instead of borrowing the rest of the attempt.
+func (e *Engine) initAfterHit(ctx context.Context) (context.Context, context.CancelFunc) {
+	ictx, cancel := context.WithCancel(ctx)
+	stop := e.cfg.Clock.AfterFunc(InitAfterHit, cancel)
+	return ictx, func() { stop.Stop(); cancel() }
+}
+
 // punchAttempt makes one attempt in mode. It returns the carrier to bind, or accepted when this end
 // was the noise3 responder of a birthday flow (the other end binds).
 func (e *Engine) punchAttempt(ctx context.Context, mode Mode, targets []netip.AddrPort, peer frame.PunchOffer) (c mux.Carrier, accepted bool, err error) {
@@ -498,14 +507,18 @@ func (e *Engine) punchAttempt(ctx context.Context, mode Mode, targets []netip.Ad
 		if err != nil {
 			return nil, false, err
 		}
-		c, err = bd.Net().DialFrom(ctx, h.Sock, h.Target, MaxInitDatagrams)
+		ictx, stopInit := e.initAfterHit(ctx)
+		defer stopInit()
+		c, err = bd.Net().DialFrom(ictx, h.Sock, h.Target, MaxInitDatagrams)
 		return c, false, err
 	case ModeSpray:
 		h, err := bd.Spray(ctx, targets[0].Addr(), lo, hi)
 		if err != nil {
 			return nil, false, err
 		}
-		c, err = e.cfg.Net.Dial(ctx, []netip.AddrPort{h.Target}, MaxInitDatagrams)
+		ictx, stopInit := e.initAfterHit(ctx)
+		defer stopInit()
+		c, err = e.cfg.Net.Dial(ictx, []netip.AddrPort{h.Target}, MaxInitDatagrams)
 		return c, false, err
 	case ModeMutual:
 		h, err := bd.Mutual(ctx, targets[0].Addr(), lo, hi)
@@ -513,7 +526,9 @@ func (e *Engine) punchAttempt(ctx context.Context, mode Mode, targets []netip.Ad
 			return nil, false, err
 		}
 		if e.lowerID() {
-			c, err = bd.Net().DialFrom(ctx, h.Sock, h.Target, MaxInitDatagrams)
+			ictx, stopInit := e.initAfterHit(ctx)
+			defer stopInit()
+			c, err = bd.Net().DialFrom(ictx, h.Sock, h.Target, MaxInitDatagrams)
 			return c, false, err
 		}
 		return nil, bd.Net().AcceptOn(ctx, h.Sock) == nil, nil
