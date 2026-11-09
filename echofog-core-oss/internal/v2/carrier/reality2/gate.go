@@ -1,12 +1,14 @@
 package reality2
 
 import (
+	"container/list"
 	"crypto/ecdh"
 	"crypto/sha256"
 	"errors"
 	mrand "math/rand/v2"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,6 +31,10 @@ const (
 	// is only a bound on the map of sources that went silent, and a stale tuple costs
 	// nothing (the QUIC stack ignores packets of an unknown connection).
 	admittedIdle = 30 * time.Minute
+	// DefaultMaxAdmitted is the hard cap on admitted 4-tuples. A stranger with a public card
+	// can mint valid tokens at will (wire.md §3.3), so without a cap the table is a memory DoS
+	// on a long-lived public node. The oldest lease is evicted first (LRU).
+	DefaultMaxAdmitted = 65536
 )
 
 // MaskKey is one live masking key of the listener (wire.md §3.3: at most 8).
@@ -53,6 +59,8 @@ type GateConfig struct {
 	MaxPending      int
 	MaxPendingBytes int
 	PendingTTL      time.Duration
+	// MaxAdmitted bounds the table of admitted 4-tuples; zero means DefaultMaxAdmitted.
+	MaxAdmitted int
 }
 
 type maskEntry struct {
@@ -70,18 +78,29 @@ type Gate struct {
 	addrs  []string
 	now    func() time.Time
 
-	maxPending int
-	maxBytes   int
-	ttl        time.Duration
+	maxPending  int
+	maxBytes    int
+	ttl         time.Duration
+	maxAdmitted int
 
 	mu       sync.Mutex
 	pending  map[string]*pendingFlight
-	admitted map[string]time.Time
+	admitted map[string]*list.Element // key → admittedEntry; the list is ordered by lease age
+	lru      *list.List               // front is the most recently used 4-tuple
 	queue    []delivery
+
+	admittedEvicted atomic.Uint64
 
 	stop      chan struct{}
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// admittedEntry is one admitted 4-tuple. The list element is the LRU position; the lease is
+// renewed on every packet in either direction.
+type admittedEntry struct {
+	key  string
+	last time.Time
 }
 
 type delivery struct {
@@ -118,17 +137,19 @@ func NewGate(conn net.PacketConn, cfg GateConfig) (*Gate, error) {
 		return nil, errors.New("reality2: gate needs at least one token address")
 	}
 	g := &Gate{
-		conn:       conn,
-		cover:      cfg.Cover,
-		replay:     cfg.Replay,
-		addrs:      append([]string(nil), cfg.Addrs...),
-		now:        cfg.Now,
-		maxPending: cfg.MaxPending,
-		maxBytes:   cfg.MaxPendingBytes,
-		ttl:        cfg.PendingTTL,
-		pending:    make(map[string]*pendingFlight),
-		admitted:   make(map[string]time.Time),
-		stop:       make(chan struct{}),
+		conn:        conn,
+		cover:       cfg.Cover,
+		replay:      cfg.Replay,
+		addrs:       append([]string(nil), cfg.Addrs...),
+		now:         cfg.Now,
+		maxPending:  cfg.MaxPending,
+		maxBytes:    cfg.MaxPendingBytes,
+		ttl:         cfg.PendingTTL,
+		maxAdmitted: cfg.MaxAdmitted,
+		pending:     make(map[string]*pendingFlight),
+		admitted:    make(map[string]*list.Element),
+		lru:         list.New(),
+		stop:        make(chan struct{}),
 	}
 	if g.now == nil {
 		g.now = time.Now
@@ -141,6 +162,9 @@ func NewGate(conn net.PacketConn, cfg GateConfig) (*Gate, error) {
 	}
 	if g.ttl <= 0 {
 		g.ttl = DefaultPendingTTL
+	}
+	if g.maxAdmitted <= 0 {
+		g.maxAdmitted = DefaultMaxAdmitted
 	}
 	for _, m := range cfg.Masks {
 		if m.Private == nil || m.Private.Curve() != ecdh.X25519() {
@@ -176,7 +200,9 @@ func (g *Gate) reapLoop() {
 	}
 }
 
-// reapExpired moves every pending flight older than the TTL to the cover.
+// reapExpired moves every pending flight older than the TTL to the cover and drops admitted
+// 4-tuples whose lease expired. Both are ordered by age, so the sweep only touches the front of
+// the admitted list.
 func (g *Gate) reapExpired() {
 	now := g.now()
 	var expired []coverPkt
@@ -189,8 +215,24 @@ func (g *Gate) reapExpired() {
 			delete(g.pending, k)
 		}
 	}
+	g.reapAdmittedLocked(now)
 	g.mu.Unlock()
 	g.forwardAll(expired)
+}
+
+// reapAdmittedLocked drops every admitted entry whose lease expired. The list is ordered by
+// lease (front newest), so expired entries are at the back.
+func (g *Gate) reapAdmittedLocked(now time.Time) {
+	for {
+		back := g.lru.Back()
+		if back == nil {
+			return
+		}
+		if now.Sub(back.Value.(*admittedEntry).last) <= admittedIdle {
+			return
+		}
+		g.dropAdmittedLocked(back)
+	}
 }
 
 // ReadFrom returns the next packet for the QUIC stack. Packets from strangers are verified or
@@ -352,22 +394,45 @@ func (g *Gate) isAdmitted(key string) bool {
 	now := g.now()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	at, ok := g.admitted[key]
+	el, ok := g.admitted[key]
 	if !ok {
 		return false
 	}
-	if now.Sub(at) > admittedIdle {
-		delete(g.admitted, key)
+	e := el.Value.(*admittedEntry)
+	if now.Sub(e.last) > admittedIdle {
+		g.dropAdmittedLocked(el)
 		return false
 	}
-	g.admitted[key] = now
+	e.last = now
+	g.lru.MoveToFront(el)
 	return true
 }
 
 func (g *Gate) admit(key string) {
+	now := g.now()
 	g.mu.Lock()
-	g.admitted[key] = g.now()
-	g.mu.Unlock()
+	defer g.mu.Unlock()
+	if el, ok := g.admitted[key]; ok {
+		e := el.Value.(*admittedEntry)
+		e.last = now
+		g.lru.MoveToFront(el)
+		return
+	}
+	el := g.lru.PushFront(&admittedEntry{key: key, last: now})
+	g.admitted[key] = el
+	for g.lru.Len() > g.maxAdmitted {
+		g.dropAdmittedLocked(g.lru.Back())
+	}
+}
+
+// dropAdmittedLocked removes one admitted 4-tuple and counts the removal. The caller holds g.mu.
+func (g *Gate) dropAdmittedLocked(el *list.Element) {
+	if el == nil {
+		return
+	}
+	g.lru.Remove(el)
+	delete(g.admitted, el.Value.(*admittedEntry).key)
+	g.admittedEvicted.Add(1)
 }
 
 // WriteTo sends a packet to an admitted source only. Everything else is dropped: a node must
@@ -377,6 +442,17 @@ func (g *Gate) WriteTo(p []byte, addr net.Addr) (int, error) {
 		return len(p), nil
 	}
 	return g.conn.WriteTo(p, addr)
+}
+
+// AdmittedEvicted reports how many admitted 4-tuples have left the table (LRU or idle TTL). It
+// is a metric for the status view.
+func (g *Gate) AdmittedEvicted() uint64 { return g.admittedEvicted.Load() }
+
+// AdmittedLen reports the current size of the admitted table (a metric).
+func (g *Gate) AdmittedLen() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.admitted)
 }
 
 // Close stops the pending-flight reaper and closes the socket. It is idempotent.

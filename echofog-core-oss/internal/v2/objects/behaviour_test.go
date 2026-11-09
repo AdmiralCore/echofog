@@ -1106,7 +1106,9 @@ func TestCardBook(t *testing.T) {
 		t.Fatal("Latest")
 	}
 
-	// A handshake key already bound to this device cannot be claimed by another device.
+	// A card alone does not bind its handshake key: the binding comes from a completed handshake
+	// (objects.md §3.2, handshake.md §7). Another device's card that claims this hs key is stored
+	// separately and must not shadow the device that owns it.
 	other := testSigner(t, "book-other-device")
 	list, _ := SealDeviceList(f.account, fixedTime+1, fixedTime+30*day, &pb.DeviceList{Devices: []*pb.Device{
 		{Key: f.device.Public(), Added: fixedTime, Flags: DevicePrimary}, {Key: other.Public(), Added: fixedTime}}})
@@ -1116,8 +1118,16 @@ func TestCardBook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := book.Add(stolen); !errors.Is(err, ErrHsKeyBound) {
-		t.Fatalf("hs_key of another device: %v", err)
+	if r, err := book.Add(stolen); err != nil {
+		t.Fatalf("a card alone must not bind hs_key: %v", err)
+	} else if r != CardAdded {
+		t.Fatalf("card of another device: result %v, want added", r)
+	}
+	if book.Get(other.Public().ID(), ScopePublic, nil) == nil {
+		t.Fatal("the other device's card was not stored")
+	}
+	if book.Get(c1.DeviceID, ScopePublic, nil) == nil {
+		t.Fatal("the device that owns the hs key lost its card")
 	}
 
 	// A newer device list without the device removes it.
