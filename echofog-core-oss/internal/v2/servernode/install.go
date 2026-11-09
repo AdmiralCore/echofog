@@ -387,20 +387,47 @@ WantedBy=multi-user.target
 // FirewallAdvice lists the commands that open the node's ports and the way to check them. The
 // installer prints them and does not run them; the operator API is loopback only and never listed.
 func FirewallAdvice(lang string, cfg Config) []string {
-	seen := map[int]bool{}
-	var ports []int
+	type rule struct{ udp, tcp bool }
+	ports := map[int]*rule{}
+	add := func(port int, udp bool) {
+		r := ports[port]
+		if r == nil {
+			r = &rule{}
+			ports[port] = r
+		}
+		if udp {
+			r.udp = true
+		} else {
+			r.tcp = true
+		}
+	}
 	for _, l := range append(append([]ListenSpec(nil), cfg.Listen...), optional(cfg.InviteListen)...) {
 		if _, p, err := net.SplitHostPort(l.Bind); err == nil {
-			if n, err := strconv.Atoi(p); err == nil && !seen[n] {
-				seen[n] = true
-				ports = append(ports, n)
+			if n, err := strconv.Atoi(p); err == nil {
+				add(n, udpSuite(l.Suite))
 			}
 		}
 	}
-	sort.Ints(ports)
-	out := []string{tr(lang, "Открыть UDP-порты ноды в файрволе сервера (и в панели хостера):", "Open the node's UDP ports in the server firewall (and in the host's panel):")}
-	for _, p := range ports {
-		out = append(out, fmt.Sprintf("  ufw allow %d/udp", p), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/udp", p))
+	// ACME tls-alpn-01 validates on TCP 443 even when the node binds the cover elsewhere.
+	if cfg.Cover != "" && cfg.CoverCert == "" {
+		add(443, false)
+	}
+	nums := make([]int, 0, len(ports))
+	for n := range ports {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+	out := []string{tr(lang,
+		"Открыть порты ноды в файрволе сервера (и в панели хостера): UDP для noise3 и reality2-quic, TCP для reality2-tcp, ws2 и ACME:",
+		"Open the node's ports in the server firewall (and in the host's panel): UDP for noise3 and reality2-quic, TCP for reality2-tcp, ws2 and ACME:")}
+	for _, p := range nums {
+		r := ports[p]
+		if r.udp {
+			out = append(out, fmt.Sprintf("  ufw allow %d/udp", p), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/udp", p))
+		}
+		if r.tcp {
+			out = append(out, fmt.Sprintf("  ufw allow %d/tcp", p), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/tcp", p))
+		}
 	}
 	out = append(out, "  firewall-cmd --reload",
 		tr(lang, "Проверка: "+installBin+" v2 doctor --data "+installData+" (достижимость определяется по подключению пира, внешние сервисы не используются).",
