@@ -221,7 +221,7 @@ Readings that the independent implementations needed, now written into the speci
 | link/card match | with `s`: invite card with `invite_id = pass_id(S)`; without: public card | objects §10.1 |
 | Ed25519 signer encoding | canonical point required, small order rejected | objects §2.2 |
 | generic 2048-byte limit | every unknown label; DHT stores only `echofog/…` labels | objects §2.2, registries §9 |
-| masking keys beyond the first 8 | referenced count uses all addresses; the processed view drops the rest | objects §3.2 |
+| masking keys beyond the first 8 | a card with more than 8 masking keys is invalid; referenced count uses all addresses | objects §3.2 |
 | `proto_ver < 200` cards | invalid | objects §3.2 |
 | extra shop-link checks | no user info, empty host, whitespace, control characters, backslashes; Unicode hosts allowed | objects §3.5 |
 | `.proto` location | text normative; reference copy at `echofog-core-oss/internal/v2/objects/pb/objects.proto` | objects §2.2 |
@@ -252,8 +252,8 @@ Readings that the independent implementations needed, now written into the speci
 | chat sender is authenticated (SPEC-FIX-1109, preaudit ЧМ-1) | "sender" in chat/2 is the authenticated session peer or a sender whose envelope decrypted under a key it proved; the sealed `Inner` fields only name a sender. Refusals from unauthenticated senders share one bounded table and never start PQXDH, replace a session or send `Reset` | services §4.4 |
 | mailbox item lifetime vs `holdFor` (SPEC-FIX-1109, ЧМ-3) | an item the handler did not process is not ACKed and lives 7 days; the receiver's 1-hour `holdFor` bounds one delivery attempt, not the lifetime | services §5.3 |
 | direct DEPOSIT dedup (SPEC-FIX-1109, ЧМ-4) | a deposit is deduplicated by `queue` + `SHA-256(blob)` for the item lifetime; a repeat with the same valid work is `stored` and buys no second slot | services §5.2 |
-| mailbox refusals for an external sender (SPEC-FIX-1109, AD20/ЧМ-12) | no queue, full and policy are one `refused` (4) with the same timing; 1, 2, 5, 6 and the `0x100` error are reserved and treated as 4; refusal table added | services §5.1, §5.3 |
-| object count limits (SPEC-FIX-1109, ЛВ-3) | count limits are validity limits over every element up to the decoder's hard ceiling; no silent truncation; only `next_keys` remains a processing limit | objects §2.3 |
+| mailbox refusals for an external sender (SPEC-FIX-1109, AD20/ЧМ-12) | no queue, full and policy are one `refused` (4) with the same timing; 1, 2, 5 and 6 are reserved for an external sender and treated as 4; `ERROR{0x100 pow-invalid}` exists only on an authenticated path; refusal table added | services §5.1, §5.3 |
+| object count limits (SPEC-FIX-1109, ЛВ-3) | count limits are validity limits over every element up to the decoder's hard ceiling; no silent truncation; `next_keys` is a processing limit, while more than 8 `mask_keys` make the card invalid | objects §2.3, §3.2 |
 | `hs_key` binding (SPEC-FIX-1109, ЛВ-1) | a key is bound to a device ID only by a completed handshake, never by a card alone | objects §3.2; handshake §7 |
 | DHT stale across day keys (SPEC-FIX-1109, ДР-1) | a record is stale when its `seq` is below the record of the same signer and label under the current or either adjacent day key | dht §3 |
 | DHT query budget (SPEC-FIX-1109, ДР-5) | 64 queries per lookup in total, shared by all paths; code counts per path (audit/PA-FIX-2) | dht §4 |

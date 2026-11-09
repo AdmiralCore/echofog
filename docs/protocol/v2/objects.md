@@ -113,9 +113,9 @@ object, one encoding).
 unknown enum value (for example a `role` value) as the documented default ("unknown": for `role`, an
 ordinary user). Count limits on repeated fields are **validity** limits: a reader counts every element
 up to the decoder's hard ceiling (the envelope byte limit) and rejects a body with more elements than
-the documented limit. It MUST NOT silently keep the first N and ignore the rest. The exceptions are a
-count that a section explicitly calls a processing limit (`next_keys` in §9) and the processed view of
-masking keys (§3.2): there the reader keeps the first N and skips the rest.
+the documented limit. It MUST NOT silently keep the first N and ignore the rest. The only exception is
+`next_keys` in §9, which a section explicitly calls a processing limit: there the reader keeps the
+first N and skips the rest.
 
 ## 3. Node card (`echofog/card/2`)
 
@@ -211,8 +211,8 @@ message SuiteParams {
   whose `hs_key` or `prev_hs` is already bound to a different signer is rejected
   ([handshake.md](handshake.md) §7).
 - Every address with a v2 suite has a valid `mask` index; every masking key is referenced by at least
-  one address (counting all addresses). In the processed view (the first 8 masking keys, §2.3
-  extension rules), addresses whose key lies beyond the first 8 are dropped.
+  one address (counting all addresses). A card with more than 8 masking keys is invalid: the count
+  limit of §2.3 is a validity limit, so the reader rejects it and does not keep the first 8.
 - Size: the encoded envelope is at most 4096 bytes.
 
 ### 3.3 How a card travels

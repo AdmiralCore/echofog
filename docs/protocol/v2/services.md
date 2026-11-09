@@ -244,8 +244,10 @@ is `ERROR{0x100 pow-invalid}` only on an authenticated path; an external sender 
    and F never dials private, loopback, link-local or reserved addresses from it; F makes at most 10
    new dials per minute for one sender session. F opens mailbox/2 on its session with M and sends the
    same `FORWARD`. M recognises `relay = self`, opens `sealed`, and stores the deposit. The result flows
-   back as `DEPOSITED` through F. F passes the status through unchanged; the refusal rule of §5.1
-   applies end to end, so an external sender sees the same `refused` for no queue, full and policy.
+   back as `DEPOSITED` through F. M applies the external-sender rule of §5.1 to a forwarded deposit.
+   F returns 0 (`stored`) and 3 (`too-large`) unchanged and maps 1, 2, 5 and 6 to 4 (`refused`),
+   including F's own `relay-unreachable` (5). An external sender therefore sees the same `refused` for
+   no queue, full, policy, a relay it cannot reach and a missing proof of work.
 3. M keeps `SHA-256(sealed)` for 7 days; a repeated `sealed` is answered `stored` without storing a
    second copy (replays by F or an on-path party add nothing).
 4. The recipient fetches with `FETCH` (long-poll: `wait` ≤ 60 s) and deletes with `ACK` only after it
