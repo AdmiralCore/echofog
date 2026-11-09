@@ -19,5 +19,22 @@ var builtinList []byte
 func BuiltinRaw() []byte { return append([]byte(nil), builtinList...) }
 
 // ReleaseKeys is the release public key set compiled into the build (T4.5/T12.4e). Empty in the
-// OSS source build: then no official list is trusted and no update is accepted.
+// OSS source build: then no official list is trusted and no update is accepted. init fills it from
+// releaseKeysSpec.
 var ReleaseKeys []keys.AKey
+
+// releaseKeysSpec is the build-time release key list: Ed25519 public keys separated by commas in
+// hex or base64. A release build passes it with
+//
+//	-ldflags "-X github.com/echofog/echofog-core/internal/v2/bootstrap.releaseKeysSpec=..."
+//
+// init parses it into ReleaseKeys; an empty spec is an OSS build with no release keys.
+var releaseKeysSpec string
+
+// buildReleaseKeys is the key set parsed by init, kept apart from ReleaseKeys so that tests can
+// check the build wiring without depending on test mutations of ReleaseKeys.
+var buildReleaseKeys []keys.AKey
+
+func init() {
+	// TODO: parse releaseKeysSpec
+}

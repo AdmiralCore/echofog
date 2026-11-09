@@ -41,7 +41,7 @@ var (
 )
 
 // Build-time and test seams of the update command. ReleaseKeys are the release public keys of the
-// build (set by the main package; empty in an unofficial build).
+// build (filled by init from releaseKeysSpec; empty in an unofficial build).
 var (
 	ReleaseKeys      []keys.AKey
 	UpdateHTTPClient *http.Client
@@ -51,6 +51,22 @@ var (
 	// UpdateNow replaces the wall clock that dates manifests (tests); nil is time.Now.
 	UpdateNow func() time.Time
 )
+
+// releaseKeysSpec is the build-time release key list: Ed25519 public keys separated by commas in
+// hex or base64. A release build passes it with
+//
+//	-ldflags "-X github.com/echofog/echofog-core/internal/v2/servernode.releaseKeysSpec=..."
+//
+// init parses it into ReleaseKeys; an empty spec is an OSS build with no release keys.
+var releaseKeysSpec string
+
+// buildReleaseKeys is the key set parsed by init, kept apart from ReleaseKeys so that tests can
+// check the build wiring without depending on test mutations of ReleaseKeys.
+var buildReleaseKeys []keys.AKey
+
+func init() {
+	// TODO: parse releaseKeysSpec
+}
 
 // maxArtifactSize bounds a download: a node binary is far smaller.
 const maxArtifactSize = 256 << 20
