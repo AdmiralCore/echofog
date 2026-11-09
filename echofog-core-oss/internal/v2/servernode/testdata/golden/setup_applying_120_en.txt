@@ -1,0 +1,8 @@
+Applying
+
+[ok] checking the release signature and file
+[ok] creating the service user
+[ok] installing the binary
+[ ] writing the configuration and keys
+
+The steps run in order; a failure at any step rolls back what was already done.

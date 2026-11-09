@@ -12,10 +12,14 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/echofog/echofog-core/internal/v2/release"
 )
@@ -201,6 +205,11 @@ func cmdStatus(args []string, env func(string) string, out io.Writer) error {
 	data := dataFlag(fs, env)
 	asJSON := fs.Bool("json", false, "print the status as JSON")
 	langFlag := fs.String("lang", "", "ru or en")
+	watch := fs.Bool("watch", false, "refresh the panel until interrupted")
+	interval := fs.Duration("interval", 2*time.Second, "refresh period of --watch")
+	widthFlag := fs.Int("width", 0, "panel width (default: the terminal width)")
+	checkUpdate := fs.Bool("check-update", false, "ask the signed manifest whether a newer version exists")
+	plain := fs.Bool("plain", false, "no colour, no full-screen refresh")
 	_, pos, err := clientFor(fs, data, args)
 	if err != nil {
 		return err
@@ -213,35 +222,84 @@ func cmdStatus(args []string, env func(string) string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var st StatusInfo
-	if err := c.call("GET", "/v1/status", nil, &st); err != nil {
-		return err
+	var upd *UpdateInfo
+	var updateErr error
+	if *checkUpdate {
+		upd, updateErr = checkForUpdate(env, lang)
+		if updateErr != nil && upd == nil {
+			updateErr = fmt.Errorf("%s", Message(lang, "panel.update.no-url"))
+		}
 	}
-	if *asJSON {
-		b, _ := json.MarshalIndent(st, "", "  ")
-		fmt.Fprintln(out, string(b))
+	color := !*plain && env("NO_COLOR") == "" && out == io.Writer(os.Stdout) && SetupIsTerminal()
+	width := *widthFlag
+	if width == 0 {
+		width = terminalWidth()
+	}
+
+	render := func() error {
+		var st StatusInfo
+		if err := c.call("GET", "/v1/status", nil, &st); err != nil {
+			return err
+		}
+		if *asJSON {
+			b, _ := json.MarshalIndent(st, "", "  ")
+			fmt.Fprintln(out, string(b))
+			return nil
+		}
+		if *watch && color {
+			fmt.Fprint(out, "\x1b[H\x1b[2J")
+		}
+		fmt.Fprintln(out, RenderStatusPanel(st, upd, updateErr, lang, width, color))
 		return nil
 	}
-	fmt.Fprintln(out, Message(lang, "status.title"))
-	fmt.Fprintf(out, "%s %s\n%s %s\n%s %s\n%s %s\n%s %d\n%s %v\n%s %d\n%s %s\n",
-		tr(lang, "версия (version):   ", "version:     "), st.Version,
-		tr(lang, "работает:           ", "uptime:      "), (time.Duration(st.UptimeSeconds) * time.Second).String(),
-		tr(lang, "идентификатор узла: ", "node id:     "), st.NodeID,
-		tr(lang, "идентификатор устр.:", "device id:   "), st.DeviceID,
-		tr(lang, "сессии:             ", "sessions:    "), st.Sessions,
-		tr(lang, "публичная карточка: ", "public card: "), st.PublicCard,
-		tr(lang, "приглашения:        ", "invitations: "), st.Invites,
-		tr(lang, "роли:               ", "roles:       "), strings.Join(st.Roles, ","))
-	for _, l := range st.Listen {
-		fmt.Fprintln(out, tr(lang, "слушает:", "listen:  "), l)
+	if !*watch {
+		return render()
 	}
-	if st.PublicLink != "" {
-		fmt.Fprintln(out, tr(lang, "публичная ссылка:", "public link: "), st.PublicLink)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	for {
+		if err := render(); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(*interval):
+		}
 	}
-	for _, w := range st.Warnings {
-		fmt.Fprintln(out, tr(lang, "предупреждение:", "warning:       "), w)
+}
+
+// checkForUpdate asks the signed manifest once; it sends nothing when no URL is configured.
+func checkForUpdate(env func(string) string, lang string) (*UpdateInfo, error) {
+	u := env("ECHOFOG_MANIFEST_URL")
+	if u == "" {
+		return nil, errors.New(Message(lang, "panel.update.no-url"))
 	}
-	return nil
+	if len(ReleaseKeys) == 0 {
+		return nil, errors.New(Message(lang, "update.no-keys"))
+	}
+	mgr, err := release.Open(release.Config{Keys: ReleaseKeys, Clock: wallClock{}})
+	if err != nil {
+		return nil, err
+	}
+	hc := UpdateHTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 10 * time.Second}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return CheckUpdate(ctx, UpdateDeps{
+		Manager: mgr, HTTP: hc, ManifestURL: u, CurrentVersion: BuildVersion,
+		Platform: runtime.GOOS + "-" + runtime.GOARCH,
+	})
+}
+
+// terminalWidth is the panel width of the terminal, or 80 when it cannot be asked.
+func terminalWidth() int {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w >= 40 {
+		return w
+	}
+	return 80
 }
 
 func cmdDoctor(args []string, env func(string) string, out io.Writer) error {

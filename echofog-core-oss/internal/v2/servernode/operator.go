@@ -44,6 +44,14 @@ type StatusInfo struct {
 	Version       string `json:"version,omitempty"`
 	UptimeSeconds int64  `json:"uptime_seconds,omitempty"`
 	Invites       int    `json:"invites,omitempty"`
+	// Visibility is "visible" or "hidden"; Limits is the configured cap (zero means none).
+	Visibility string     `json:"visibility,omitempty"`
+	Limits     LimitsSpec `json:"limits,omitempty"`
+	// Traffic counters of the carriers: since the start and since 00:00 UTC.
+	TrafficIn     uint64 `json:"traffic_in,omitempty"`
+	TrafficOut    uint64 `json:"traffic_out,omitempty"`
+	TrafficDayIn  uint64 `json:"traffic_day_in,omitempty"`
+	TrafficDayOut uint64 `json:"traffic_day_out,omitempty"`
 }
 
 // ErrNoInvites: invitations are off (no invite listener configured).

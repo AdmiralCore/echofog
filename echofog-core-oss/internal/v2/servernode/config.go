@@ -61,10 +61,23 @@ type CoverACMESpec struct {
 	Challenge string `json:"challenge,omitempty"`
 }
 
+// LimitsSpec caps what the node itself spends on the network (T12.4f). Zero means no cap.
+type LimitsSpec struct {
+	// BandwidthMbps is the shared limit of all carriers of this node, in megabits per second.
+	BandwidthMbps int `json:"bandwidth_mbps,omitempty"`
+	// Sessions is the number of live sessions the node keeps; the oldest is dropped above it.
+	Sessions int `json:"sessions,omitempty"`
+}
+
 // Config is server.json in the data directory.
 type Config struct {
 	Version int          `json:"version"`
 	Listen  []ListenSpec `json:"listen"`
+	// Visibility is "visible" (default: a public card in the DHT and PEX) or "hidden" (no public
+	// card: the node is reachable only through links its operator hands out).
+	Visibility string `json:"visibility,omitempty"`
+	// Limits caps the node's own network use; nil means the defaults.
+	Limits *LimitsSpec `json:"limits,omitempty"`
 	// InviteListen is the separate listener that invitations point to. Without it invitations are
 	// off.
 	InviteListen *ListenSpec `json:"invite_listen,omitempty"`
@@ -176,6 +189,19 @@ func bad(format string, a ...any) error {
 func (c *Config) Validate() error {
 	if c.Version != 1 {
 		return bad("version %d, want 1", c.Version)
+	}
+	switch c.Visibility {
+	case "", "visible", "hidden":
+	default:
+		return bad("visibility %q: want visible or hidden", c.Visibility)
+	}
+	if l := c.Limits; l != nil {
+		if l.BandwidthMbps < 0 || l.BandwidthMbps > 100000 {
+			return bad("limits.bandwidth_mbps %d: want 0 to 100000", l.BandwidthMbps)
+		}
+		if l.Sessions < 0 || l.Sessions > 10000 {
+			return bad("limits.sessions %d: want 0 to 10000", l.Sessions)
+		}
 	}
 	if len(c.Listen) == 0 || len(c.Listen) > maxListeners {
 		return bad("%d listeners, want 1 to %d", len(c.Listen), maxListeners)

@@ -1,0 +1,21 @@
+The node is running
+Public link: echofog://public/AQIDBA
+                                 
+      █▀▀▀▀▀█  ▀▄▄█▄▀▄▄ █▀▀▀▀▀█  
+      █ ███ █ ▀██▄▀▄▄▀  █ ███ █  
+      █ ▀▀▀ █  ▄▀  ▄ ██ █ ▀▀▀ █  
+      ▀▀▀▀▀▀▀ █▄█ █▄█ ▀ ▀▀▀▀▀▀▀  
+      ▀▀▀▄██▀█▀ ██    ███▄ ▄█▄▄  
+       ▀████▀▄█▀ ▄ ▄█▄ ▀▄▀▄ ▀▀█  
+       █▀▀▄ ▀▀ ▄ ▄█▄ ▀█▀█▄  ▄▄█  
+      ▀▄▄   ▀▀ ▀▀▀█▄ ▄█▄▀▄▄▀ ▀▀  
+      ▀ ▀   ▀▀▄███ ▄ ██▀▀▀█  ██  
+      █▀▀▀▀▀█ ██ ▄ █▀▀█ ▀ █  ▀█  
+      █ ███ █ ▀▀█▄█▄ ▄█▀▀▀█ ▄▀▀  
+      █ ▀▀▀ █ █▀ ▀█▄█▄█▀  █▀ ▄▀  
+      ▀▀▀▀▀▀▀ ▀▀▀▀▀ ▀▀▀▀▀▀▀  ▀▀  
+                                 
+Invitation link: echofog://invite/BAUG
+The cover certificate is valid for 62 more days.
+
+Enter for the recovery phrase (shown once).

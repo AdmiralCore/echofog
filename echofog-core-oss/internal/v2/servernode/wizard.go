@@ -95,7 +95,13 @@ func normLang(s string) string {
 // RunWizard asks the questions of the setup, one line each; Enter takes the default. It prints
 // the notes of the chosen preset in the summary and never asks for a secret.
 func RunWizard(in io.Reader, out io.Writer, d WizardDefaults) (*WizardResult, error) {
-	w := &wizard{in: bufio.NewReader(in), out: out, lang: normLang(d.Lang)}
+	return runWizard(bufio.NewReader(in), out, d)
+}
+
+// runWizard is RunWizard on a reader the caller keeps for the next question: the setup asks the
+// confirmation from the same buffer, so a piped answer is not lost to read-ahead.
+func runWizard(r *bufio.Reader, out io.Writer, d WizardDefaults) (*WizardResult, error) {
+	w := &wizard{in: r, out: out, lang: normLang(d.Lang)}
 	fmt.Fprintln(out, Message(w.lang, "wizard.title"))
 
 	lang, err := w.ask(Message(w.lang, "wizard.lang"), w.lang, func(s string) (string, string) {
@@ -115,7 +121,7 @@ func RunWizard(in io.Reader, out io.Writer, d WizardDefaults) (*WizardResult, er
 		switch {
 		case !ok:
 			return "", "wizard.bad-answer"
-		case p == PresetExitPaid || p == PresetExitPrivate:
+		case p == PresetExitPaid || p == PresetOwn:
 			return "", "wizard.preset-unavailable"
 		}
 		return string(p), ""

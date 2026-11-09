@@ -22,7 +22,7 @@ func TestInstallScript(t *testing.T) {
 	}
 	for _, must := range []string{
 		"set -eu", "umask 077", "mktemp -d", "trap", "--proto '=https'", "--tlsv1.2", "--proto-redir '=https'", "--connect-timeout", "--max-time", "--fail", "ECHOFOG_RELEASE_URL", "uname -m",
-		"v2 install", "--manifest", "--binary",
+		"v2 setup", "--manifest", "--binary",
 		"ssh-keygen", "-Y verify", "BEGIN RELEASE KEYS", "END RELEASE KEYS", "release.txt", "release.txt.sigs", "--allow-rollback", "--fingerprint", "MIN_VERSION_FLOOR", "KEY_EPOCH",
 	} {
 		if !strings.Contains(sh, must) {
@@ -41,14 +41,14 @@ func TestInstallScript(t *testing.T) {
 	if regexp.MustCompile(`https://[a-z0-9.-]+`).MatchString(strings.ReplaceAll(sh, "https://example.org", "")) {
 		t.Error("install.sh hardcodes a download address")
 	}
-	// The downloaded binary is executed once, and that is the install command, which verifies the
+	// The downloaded binary is executed once, and that is the setup command, which verifies the
 	// signed manifest before it does anything.
 	runs := 0
 	for _, line := range strings.Split(sh, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), `"$BIN"`) {
 			runs++
-			if !strings.Contains(line, "v2 install") {
-				t.Errorf("the downloaded binary is run other than through v2 install: %q", line)
+			if !strings.Contains(line, "v2 setup") {
+				t.Errorf("the downloaded binary is run other than through v2 setup: %q", line)
 			}
 		}
 	}

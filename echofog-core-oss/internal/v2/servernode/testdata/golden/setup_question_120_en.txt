@@ -1,0 +1,8 @@
+Own cover domain (empty: no cover)
+Why: the cover shows a prober an ordinary site instead of the node. Without a domain there is no public card and the
+node serves only its own people. A free DDNS name is more conspicuous and risks a block of the whole service.
+
+> _
+default: none
+
+↑/↓ choose · Enter next · Esc cancels

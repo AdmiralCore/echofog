@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -63,6 +64,17 @@ type InstallDeps struct {
 	Euid        int
 	SelfTest    func(ctx context.Context, exe string) (string, error)
 	Start       bool
+	// Progress receives the code of each step before it runs ("verify", "user", "binary",
+	// "profile", "unit", "reload", "service", "firewall", "health"). Nil is silent.
+	Progress func(step string)
+	// Firewall opens the node's ports in ufw or nftables, with the rollback of every rule it adds.
+	// The operator's consent is the caller's business (T12.4f).
+	Firewall bool
+	// FirewallProbe finds a firewall tool; nil uses exec.LookPath.
+	FirewallProbe func(name string) (string, error)
+	// Health checks the started node; nil polls the operator API when Root is "" and does nothing
+	// in a test root.
+	Health func(ctx context.Context, dataDir string) error
 }
 
 // InstallResult is what the installer reports. Phrase is the recovery phrase: show it once, never log it.
@@ -212,6 +224,11 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	if err := d.Config.Validate(); err != nil {
 		return nil, err
 	}
+	progress := d.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+	progress("verify")
 	v, err := verifyBinary(ctx, d)
 	if err != nil {
 		return nil, err
@@ -240,16 +257,19 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	}
 
 	if _, err := d.Runner.Run(ctx, "id", "-u", d.User); err != nil {
+		progress("user")
 		if out, err := d.Runner.Run(ctx, "useradd", "--system", "--user-group", "--home-dir", installData, "--shell", "/usr/sbin/nologin", d.User); err != nil {
 			return failed("useradd (create the service user)", err, out)
 		}
 	}
+	progress("binary")
 	if err := mkdirTracked(filepath.Dir(at(installBin)), 0o755, &undo); err != nil {
 		return failed("creating the binary folder", err, nil)
 	}
 	if err := copyVerified(v, at(installBin), &undo); err != nil {
 		return failed("copying the binary", err, nil)
 	}
+	progress("profile")
 	dataBefore := dirNames(at(installData))
 	if top := topMissing(at(installData)); top != "" {
 		undo.push(func() { _ = os.RemoveAll(top) })
@@ -263,6 +283,7 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	if out, err := d.Runner.Run(ctx, "chown", "-R", d.User+":"+d.User, at(installData)); err != nil {
 		return failed("chown (hand the data folder to "+d.User+")", err, out)
 	}
+	progress("unit")
 	if err := mkdirTracked(filepath.Dir(at(installUnit)), 0o755, &undo); err != nil {
 		return failed("creating the unit folder", err, nil)
 	}
@@ -270,12 +291,39 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		return failed("writing the unit", err, nil)
 	}
 	undo.push(func() { _ = os.Remove(at(installUnit)) })
+	progress("reload")
 	if out, err := d.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
 		return failed("systemctl daemon-reload", err, out)
 	}
 	if d.Start {
+		progress("service")
 		if out, err := d.Runner.Run(ctx, "systemctl", "enable", "--now", unitServName); err != nil {
 			return failed("systemctl enable (start the service)", err, out)
+		}
+	}
+	if d.Firewall {
+		progress("firewall")
+		probe := d.FirewallProbe
+		if probe == nil {
+			probe = exec.LookPath
+		}
+		tool := firewallTool(probe)
+		if tool != "" {
+			undoFw, err := openFirewall(ctx, d.Runner, d.Root, d.Config, tool)
+			if err != nil {
+				return failed("opening the firewall ports", err, nil)
+			}
+			undo.push(func() { undoFw(context.Background(), d.Runner) })
+		}
+	}
+	health := d.Health
+	if health == nil && d.Start && d.Root == "" {
+		health = defaultHealth
+	}
+	if health != nil && d.Start {
+		progress("health")
+		if err := health(ctx, at(installData)); err != nil {
+			return failed("checking the node's health", err, nil)
 		}
 	}
 	advice := FirewallAdvice(d.Lang, d.Config)
@@ -387,6 +435,30 @@ WantedBy=multi-user.target
 // FirewallAdvice lists the commands that open the node's ports and the way to check them. The
 // installer prints them and does not run them; the operator API is loopback only and never listed.
 func FirewallAdvice(lang string, cfg Config) []string {
+	out := []string{tr(lang,
+		"Открыть порты ноды в файрволе сервера (и в панели хостера): UDP для noise3 и reality2-quic, TCP для reality2-tcp, ws2 и ACME:",
+		"Open the node's ports in the server firewall (and in the host's panel): UDP for noise3 and reality2-quic, TCP for reality2-tcp, ws2 and ACME:")}
+	for _, r := range firewallRules(cfg) {
+		if r.udp {
+			out = append(out, fmt.Sprintf("  ufw allow %d/udp", r.port), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/udp", r.port))
+		}
+		if r.tcp {
+			out = append(out, fmt.Sprintf("  ufw allow %d/tcp", r.port), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/tcp", r.port))
+		}
+	}
+	out = append(out, "  firewall-cmd --reload",
+		tr(lang, "Проверка: "+installBin+" v2 doctor --data "+installData+" (достижимость определяется по подключению пира, внешние сервисы не используются).",
+			"Check: "+installBin+" v2 doctor --data "+installData+" (reachability is judged by a peer connecting; no outside service is used)."))
+	return out
+}
+
+type firewallRule struct {
+	port     int
+	udp, tcp bool
+}
+
+// firewallRules returns the ports the node needs, split by transport.
+func firewallRules(cfg Config) []firewallRule {
 	type rule struct{ udp, tcp bool }
 	ports := map[int]*rule{}
 	add := func(port int, udp bool) {
@@ -417,21 +489,10 @@ func FirewallAdvice(lang string, cfg Config) []string {
 		nums = append(nums, n)
 	}
 	sort.Ints(nums)
-	out := []string{tr(lang,
-		"Открыть порты ноды в файрволе сервера (и в панели хостера): UDP для noise3 и reality2-quic, TCP для reality2-tcp, ws2 и ACME:",
-		"Open the node's ports in the server firewall (and in the host's panel): UDP for noise3 and reality2-quic, TCP for reality2-tcp, ws2 and ACME:")}
-	for _, p := range nums {
-		r := ports[p]
-		if r.udp {
-			out = append(out, fmt.Sprintf("  ufw allow %d/udp", p), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/udp", p))
-		}
-		if r.tcp {
-			out = append(out, fmt.Sprintf("  ufw allow %d/tcp", p), fmt.Sprintf("  firewall-cmd --permanent --add-port=%d/tcp", p))
-		}
+	out := make([]firewallRule, 0, len(nums))
+	for _, n := range nums {
+		out = append(out, firewallRule{port: n, udp: ports[n].udp, tcp: ports[n].tcp})
 	}
-	out = append(out, "  firewall-cmd --reload",
-		tr(lang, "Проверка: "+installBin+" v2 doctor --data "+installData+" (достижимость определяется по подключению пира, внешние сервисы не используются).",
-			"Check: "+installBin+" v2 doctor --data "+installData+" (reachability is judged by a peer connecting; no outside service is used)."))
 	return out
 }
 
