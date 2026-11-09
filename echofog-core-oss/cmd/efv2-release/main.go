@@ -6,7 +6,8 @@
 //	efv2-release assemble --version V --released-at UNIX [--notes-url URL]
 //	                      [--policy comp=min,rec[,deprecated_after]]...
 //	                      [--artifact platform,name,sha256hex,size,url]...
-//	                      [--next-key KEY]... [--revoke-key KEY]... [--min-version X.Y.Z] --out manifest.bin
+//	                      [--next-key KEY]... [--revoke-key KEY]... [--min-version X.Y.Z]
+//	                      [--bootstrap-list list.bin] --out manifest.bin
 //	efv2-release cosign   --manifest manifest.bin --key K2.key --out K2.cosig
 //	efv2-release sign     --manifest manifest.bin --key K1.key [--cosig K2.cosig]...
 //	                      --not-after UNIX --out release.bin
@@ -35,9 +36,11 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/echofog/echofog-core/internal/v2/bootstrap"
 	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
+	"github.com/echofog/echofog-core/internal/v2/release"
 )
 
 func main() {
@@ -190,6 +193,7 @@ func cmdAssemble(args []string, stdout io.Writer) error {
 	releasedAt := fs.Uint64("released-at", 0, "release time, unix seconds")
 	notes := fs.String("notes-url", "", "https URL of the release notes")
 	minVersion := fs.String("min-version", "", "oldest version that may be installed or kept, X.Y.Z (default: no bound)")
+	bootstrapList := fs.String("bootstrap-list", "", "signed entry list to carry in the manifest (T5.6)")
 	out := fs.String("out", "", "manifest output file")
 	var policies, artifacts, nextKeys, revoked multi
 	fs.Var(&policies, "policy", "component=min_supported,recommended[,deprecated_after]")
@@ -253,9 +257,22 @@ func cmdAssemble(args []string, stdout io.Writer) error {
 		}
 		rel.RevokedKeys = append(rel.RevokedKeys, key)
 	}
+	if *bootstrapList != "" {
+		list, err := os.ReadFile(*bootstrapList)
+		if err != nil {
+			return fmt.Errorf("--bootstrap-list: %w", err)
+		}
+		if len(list) == 0 || len(list) > bootstrap.ListMaxBytes {
+			return fmt.Errorf("--bootstrap-list: %d bytes", len(list))
+		}
+		rel.BootstrapList = list
+	}
 	raw, err := objects.Marshal(rel)
 	if err != nil {
 		return err
+	}
+	if len(raw) > release.MaxManifestSize {
+		return fmt.Errorf("manifest is %d bytes, the release record limit is %d", len(raw), release.MaxManifestSize)
 	}
 	if err := os.WriteFile(*out, raw, 0o644); err != nil {
 		return err

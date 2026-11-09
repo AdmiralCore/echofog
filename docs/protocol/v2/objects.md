@@ -382,6 +382,7 @@ message Release {
   string notes_url = 6;                 // https only
   repeated bytes revoked_keys = 7;      // akeys removed from the release key set
   string min_version = 8;               // "X.Y.Z": the oldest version that may be installed or kept; empty = no bound
+  bytes bootstrap_list = 9;             // signed official entry list (T5.6); additive
 }
 message Policy {
   string component = 1;                 // "proto", "l1:1", "svc:3", "obj:echofog/card/2", "l0:2"
@@ -400,6 +401,8 @@ message Artifact {
 
 **`min_version` (T12.4e).** A strict `X.Y.Z` (no leading zeros, no leading `v`, all three parts
 present). It must not be above `version` of the same manifest (a manifest that does so is invalid). The server installer and `update` refuse a version below it and below the installed one; a deliberate rollback needs an explicit flag and never goes below `min_version`. The field is additive: a node that does not know field 8 keeps it as an unknown field, and the signatures cover it.
+
+**`bootstrap_list` (T5.6).** The signed official entry list of the release, carried with the manifest so the update flow delivers it (the list is not a protocol frame of its own). It is the output of `efv2-release bootstrap-sign`: a body of T5.5 list lines with its own `seq`, term and Ed25519 signature by a release key, accepted only when the signature verifies, the term has not passed and its `seq` is newer than the applied list (the format and the check live in `internal/v2/bootstrap`). The field is additive: a node that does not know field 9 keeps it as an unknown field, and the manifest signatures cover it. A manifest with the field stays within the `echofog/release/2` record limit (registries.md §9).
 
 **Decision D16 (release keys, revised).** Builds carry 3 release public keys (the initial key set). The
 project maintainer holds the three private keys, each on separate offline media.

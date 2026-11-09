@@ -198,18 +198,28 @@ func (m *Manager) replay() {
 		return
 	}
 	st := m.state.Load()
+	var lastList []byte
 	for _, e := range entries {
 		if len(e.Key) != len(chainPref)+8 || len(e.Value) > MaxManifestSize {
 			m.lost("bad record")
 			return
 		}
 		at := time.Unix(int64(binary.BigEndian.Uint64(e.Key[len(chainPref):])), 0)
-		if _, err := st.Apply(e.Value, at); err != nil {
+		mf, err := st.Apply(e.Value, at)
+		if err != nil {
 			m.lost("a stored manifest does not verify: %v", err)
 			return
 		}
 		m.latest = append(m.latest[:0], e.Value...)
 		m.chainLen++
+		if list := mf.Release.GetBootstrapList(); len(list) > 0 {
+			lastList = append(lastList[:0], list...)
+		}
+	}
+	// The entry list of the last applied manifest is delivered again after a restart: the list
+	// manager may have lost its own store while the manifest chain survived.
+	if len(lastList) > 0 && m.cfg.OnBootstrapList != nil {
+		m.cfg.OnBootstrapList(lastList)
 	}
 }
 
@@ -301,6 +311,9 @@ func (m *Manager) Offer(raw []byte) (bool, error) {
 	m.chainLen++
 	ev, notify := m.eventFor(applied, now)
 	m.mu.Unlock()
+	if list := applied.Release.GetBootstrapList(); len(list) > 0 && m.cfg.OnBootstrapList != nil {
+		m.cfg.OnBootstrapList(append([]byte(nil), list...))
+	}
 	if notify && m.cfg.OnEvent != nil {
 		m.cfg.OnEvent(ev)
 	}

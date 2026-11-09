@@ -191,8 +191,42 @@ func (n *NodeApi) ApplyBootstrapList(raw []byte) error {
 	return bootstrapErr(m.Offer(raw))
 }
 
-// applyBootstrapList delivers the signed entry list of a release manifest (T5.6).
-func (s *v2Stack) applyBootstrapList(raw []byte) {}
+// applyBootstrapList delivers the signed entry list of a release manifest (T5.6). The list is
+// checked first (signature, term, seq): a refused list leaves the applied list and the old update
+// file untouched. An accepted list is written next to node.json and consumed by OfferFile, so the
+// startup path and the update path use the same rules. Only counts and the error class are logged.
+func (s *v2Stack) applyBootstrapList(raw []byte) {
+	if len(raw) == 0 || s.boot == nil || s.dir == "" {
+		return
+	}
+	s.bootMu.Lock()
+	defer s.bootMu.Unlock()
+	if err := s.boot.Check(raw); err != nil {
+		if !errors.Is(err, bootstrap.ErrListStale) && s.log != nil {
+			s.log.Warn("v2 bootstrap: the signed list in the manifest was refused", "err", err)
+		}
+		return
+	}
+	path := filepath.Join(s.dir, v2BootstrapUpdate)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		warn(s.log, "v2 bootstrap: writing the signed list update", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		warn(s.log, "v2 bootstrap: placing the signed list update", err)
+		return
+	}
+	applied, err := s.boot.OfferFile(path)
+	if err != nil {
+		warn(s.log, "v2 bootstrap: the signed list update was refused", err)
+		return
+	}
+	if applied && s.log != nil {
+		s.log.Info("v2 bootstrap: signed list updated", "seq", s.boot.Seq())
+	}
+}
 
 // runBootstrapEntries dials the entries once in the background, without logging their lines.
 func (n *NodeApi) runBootstrapEntries(entries []bootstrap.Entry) {

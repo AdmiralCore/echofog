@@ -447,17 +447,34 @@ func (m *Manager) saveLocked() error {
 	return m.cfg.SaveCustom(append([]string(nil), m.lines...))
 }
 
+// Check verifies a signed list without applying it: the release signature, the term and a seq
+// newer than the effective one. It changes nothing.
+func (m *Manager) Check(raw []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.checkLocked(raw)
+	return err
+}
+
+func (m *Manager) checkLocked(raw []byte) (*SignedList, error) {
+	l, err := OpenList(raw, m.cfg.Keys, m.cfg.Now())
+	if err != nil {
+		return nil, err
+	}
+	if !m.newer(l) {
+		return nil, fmt.Errorf("%w: %d after %d", ErrListStale, l.Seq, m.currentSeq())
+	}
+	return l, nil
+}
+
 // Offer applies a signed list from a release update. The signature, the term and the seq are
 // checked; a rejected list changes nothing.
 func (m *Manager) Offer(raw []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	l, err := OpenList(raw, m.cfg.Keys, m.cfg.Now())
+	l, err := m.checkLocked(raw)
 	if err != nil {
 		return err
-	}
-	if !m.newer(l) {
-		return fmt.Errorf("%w: %d after %d", ErrListStale, l.Seq, m.currentSeq())
 	}
 	if m.cfg.KV != nil {
 		if err := m.cfg.KV.Put(listKey, l.Raw); err != nil {
