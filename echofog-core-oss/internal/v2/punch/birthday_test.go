@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/mux"
 )
 
 func TestNarrow(t *testing.T) {
@@ -372,4 +374,122 @@ func TestConcurrentCap(t *testing.T) {
 	cancel()
 	clk.Advance(PunchWindow + time.Second)
 	wg.Wait()
+}
+
+// countNet is a SockNet that counts every datagram its sockets send and can deliver one datagram
+// from the peer's IP in the middle of the run, at a chosen count. It is used to check the budget of
+// services.md §6.4.1 on the last possible datagram.
+type countNet struct {
+	peer     netip.AddrPort
+	injectAt int
+	mu       sync.Mutex
+	sent     int
+}
+
+type countSock struct {
+	n    *countNet
+	recv chan Datagram
+}
+
+func (n *countNet) OpenSock() (Sock, error) {
+	return &countSock{n: n, recv: make(chan Datagram, 8)}, nil
+}
+
+func (n *countNet) Listener() Sock { return nil }
+
+func (n *countNet) DialFrom(context.Context, Sock, netip.AddrPort, int) (mux.Carrier, error) {
+	return nil, errors.New("countNet: no flow")
+}
+
+func (n *countNet) AcceptOn(context.Context, Sock) error { return nil }
+
+func (n *countNet) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.sent
+}
+
+func (s *countSock) Send(_ netip.AddrPort, _ []byte) error {
+	n := s.n
+	n.mu.Lock()
+	n.sent++
+	at := n.sent
+	n.mu.Unlock()
+	if at == n.injectAt {
+		select {
+		case s.recv <- Datagram{From: n.peer, Payload: make([]byte, 40)}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (s *countSock) Recv() <-chan Datagram { return s.recv }
+func (s *countSock) Close() error          { return nil }
+
+// The reply junk of dial and mutual is a punching datagram like every other: a hit on the last
+// datagram of the budget still leaves 960 in all, never 961. The first case injects a hit on the
+// last budgeted datagram (the reply must fit after it); the second injects past the budget and only
+// requires that the cap holds.
+func TestReplyJunkCountsTowardsLimit(t *testing.T) {
+	cases := []struct {
+		name     string
+		injectAt int
+		wantHit  bool
+	}{
+		{"last datagram of the budget", MaxPunchPackets - 1, true},
+		{"past the budget", MaxPunchPackets, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			clk := newFakeClock()
+			peer := netip.MustParseAddrPort("203.0.113.5:50000")
+			n := &countNet{peer: peer, injectAt: tc.injectAt}
+			b := NewBirthday(BirthdayConfig{Clock: clk, Net: n,
+				Rand: func(v int64) int64 { return v / 2 }, Gates: openGates()})
+			done := make(chan struct{})
+			var (
+				h   Hit
+				err error
+			)
+			go func() {
+				h, err = b.Dial(context.Background(), peer, true)
+				close(done)
+			}()
+			start := clk.Now()
+			// Steady wake-ups for the first 2.5 s, then one jump to 2.998 s: the rest of the budget
+			// leaves in one batch, so an injected hit can land on its very last datagram.
+			for clk.Now().Sub(start) < 2500*time.Millisecond {
+				clk.Advance(time.Millisecond)
+				time.Sleep(200 * time.Microsecond)
+			}
+			clk.Advance(498 * time.Millisecond)
+			for {
+				select {
+				case <-done:
+				default:
+					if clk.Now().Sub(start) > PunchWindow+time.Second {
+						panic("birthday attempt ran past the test time")
+					}
+					clk.Advance(time.Millisecond)
+					time.Sleep(200 * time.Microsecond)
+					continue
+				}
+				break
+			}
+			if got := n.count(); got > MaxPunchPackets {
+				t.Fatalf("%d datagrams sent, limit %d (the reply junk counts)", got, MaxPunchPackets)
+			}
+			if !tc.wantHit {
+				return
+			}
+			if err != nil || h.Sock == nil {
+				t.Fatalf("hit on the last budgeted datagram: %v", err)
+			}
+			if got := n.count(); got != MaxPunchPackets {
+				t.Fatalf("%d datagrams sent, want %d (the reply fills the last slot)", got, MaxPunchPackets)
+			}
+		})
+	}
 }
