@@ -62,7 +62,10 @@ Record kinds, sizes, lifetimes and replica counts: [registries.md](registries.md
    release keys stores none (`STORED{refused}`);
 2. check that the request's key equals the derivation of §2 for the current or an adjacent day;
 3. replace a stored record only with a higher `seq` from the same signer; equal `seq` with different
-   bytes keeps the smaller `object_id`; a lower `seq` is refused (`STORED{stale}`);
+   bytes keeps the smaller `object_id`; a record is stale (`STORED{stale}`) when its `seq` is lower
+   than the record of the same signer and label stored under the current **or either adjacent** day
+   key (a writer that publishes under day `d+1` must not roll back day `d` with a lower `seq`); a
+   lower `seq` is refused;
 4. drop records at `not_after` (or the clipped expiry);
 5. enforce quotas:
    - per signer: at most 8 records of known labels and 4 of unknown labels;
@@ -74,7 +77,9 @@ Record kinds, sizes, lifetimes and replica counts: [registries.md](registries.md
      near the node are never displaced by far-away spam.
 
 A node stores only keys for which it is among the 20 closest nodes it knows, plus a cache of popular
-records (at most 1000) that it serves but does not count as replicas.
+records (at most 1000) that it serves but does not count as replicas. Only entries kept in memory from
+a working session count toward that "20 closest"; a cold entry (metadata of a card kept on disk only,
+§5) does not count and is not served until a session refreshes it into memory.
 
 Publishers store each record on the `replicas` closest nodes found by a lookup
 ([registries.md](registries.md) §9), chosen with **at most one node per diversity unit**, and
@@ -86,7 +91,8 @@ republish when half of the remaining lifetime has passed, or after a change, wit
 
 Iterative: query the `α` closest known nodes with `FIND_NODE{target}`; each answers `NODES` with up to
 20 **signed cards** ([objects.md](objects.md) §3); continue with the closest unqueried nodes until the
-20 closest have answered or 64 queries have been sent. Per query timeout 2 s. The "20 closest" set is
+20 closest have answered or 64 queries have been sent **in total for this lookup** (one budget for the
+whole lookup, not one per path). Per query timeout 2 s. The "20 closest" set is
 formed with at most one node per diversity unit and at most 2 per /16 (IPv6 /24).
 
 - Replies are bound to the asked node: they arrive on a `dht/2` stream of the authenticated session
@@ -100,7 +106,8 @@ formed with at most one node per diversity unit and at most 2 per /16 (IPv6 /24)
 
 - The lookup **does not stop at the first answers**: it continues until all of the 20 closest
   responsive nodes (formed with the diversity rule of §4.1) have answered, or 64 queries have been
-  sent.
+  sent **in total across all three paths**. The query budget belongs to the lookup, not to a path; the
+  paths share it.
 - It runs over **3 disjoint paths** (S/Kademlia style): three sets of queried nodes that share no node
   and no diversity unit, each path continuing only from nodes its own path returned. This is REQUIRED
   for `prekeys/2`, `card/2`, `mailbox-hint/2` and `release/2`, and RECOMMENDED for other labels.
@@ -134,8 +141,13 @@ victim's address and make the network dial it (reflection, V4).
   is added only from the card of its authenticated session.
 - The table is saved every 5 minutes with jitter as the list of cards, so after a restart addresses and
   roles are known from signed data (C12).
+- A **cold** entry is metadata of a card kept on disk only (a bucket overflow or the memory limit put
+  it there). Cold entries do not count as the "20 closest nodes it knows" for storage (§3) and are not
+  returned in `NODES` or `VALUE` replies until a session with that node refreshes them into memory.
+  Being close on disk is therefore not enough to be counted or served.
 - Refresh: each bucket not touched for `uniform(10, 15)` minutes is refreshed with a lookup of a random
-  ID in it; a self-lookup runs at start-up.
+  ID in it. **Empty buckets are refreshed too**: a bucket emptied by eviction must not stay empty, and
+  the periodic refresh and the start-up self-lookup are what fill it again.
 
 ## 6. Proxied lookups (guard mode)
 

@@ -221,7 +221,7 @@ Readings that the independent implementations needed, now written into the speci
 | link/card match | with `s`: invite card with `invite_id = pass_id(S)`; without: public card | objects §10.1 |
 | Ed25519 signer encoding | canonical point required, small order rejected | objects §2.2 |
 | generic 2048-byte limit | every unknown label; DHT stores only `echofog/…` labels | objects §2.2, registries §9 |
-| masking keys beyond the first 8 | referenced count uses all addresses; the processed view drops the rest | objects §3.2 |
+| masking keys beyond the first 8 | a card with more than 8 masking keys is invalid; referenced count uses all addresses | objects §3.2 |
 | `proto_ver < 200` cards | invalid | objects §3.2 |
 | extra shop-link checks | no user info, empty host, whitespace, control characters, backslashes; Unicode hosts allowed | objects §3.5 |
 | `.proto` location | text normative; reference copy at `echofog-core-oss/internal/v2/objects/pb/objects.proto` | objects §2.2 |
@@ -249,3 +249,25 @@ Readings that the independent implementations needed, now written into the speci
 | files from non-contacts and WANT (SPEC-FIX-1108, decision 2026-11-08 T11.3e; order 298) | the offer names no group; a non-contact's offer is accepted only if the receiver's own log holds a MSG event with that fid whose author is the sender and who may write in the channel; a WANT is served only to a member of that conversation with read rights on the channel; otherwise CANCEL reason 3 | services §8 |
 | unknown kinds and fields in examples (SPEC-FIX-1108) | group.close and att as examples: a client without them stores, syncs and forwards group.close and shows its placeholder; att is an unknown field of a known MSG kind and shows the text without the card | versioning §3.9 |
 | conversation-log signature (SPEC-FIX-1108, order 286) | the spec now gives the signed bytes as the code does (`echofog-ev-sig-v1`, length-prefixed fields, SHA-256 of the body, `ext`, `body_hash`), and the id over signed bytes and sig; vectors `convlog.json` added, checked by the code's test | conversation-log §2.2; vectors/convlog.json |
+| chat sender is authenticated (SPEC-FIX-1109, preaudit ЧМ-1) | "sender" in chat/2 is the authenticated session peer or a sender whose envelope decrypted under a key it proved; the sealed `Inner` fields only name a sender. Refusals from unauthenticated senders share one bounded table and never start PQXDH, replace a session or send `Reset` | services §4.4 |
+| mailbox item lifetime vs `holdFor` (SPEC-FIX-1109, ЧМ-3) | an item the handler did not process is not ACKed and lives 7 days; the receiver's 1-hour `holdFor` bounds one delivery attempt, not the lifetime | services §5.3 |
+| direct DEPOSIT dedup (SPEC-FIX-1109, ЧМ-4) | a deposit is deduplicated by `queue` + `SHA-256(blob)` for the item lifetime; a repeat with the same valid work is `stored` and buys no second slot | services §5.2 |
+| mailbox refusals for an external sender (SPEC-FIX-1109, AD20/ЧМ-12) | no queue, full and policy are one `refused` (4) with the same timing; 1, 2, 5 and 6 are reserved for an external sender and treated as 4; `ERROR{0x100 pow-invalid}` exists only on an authenticated path; refusal table added | services §5.1, §5.3 |
+| object count limits (SPEC-FIX-1109, ЛВ-3) | count limits are validity limits over every element up to the decoder's hard ceiling; no silent truncation; `next_keys` is a processing limit, while more than 8 `mask_keys` make the card invalid | objects §2.3, §3.2 |
+| `hs_key` binding (SPEC-FIX-1109, ЛВ-1) | a key is bound to a device ID only by a completed handshake, never by a card alone | objects §3.2; handshake §7 |
+| DHT stale across day keys (SPEC-FIX-1109, ДР-1) | a record is stale when its `seq` is below the record of the same signer and label under the current or either adjacent day key | dht §3 |
+| DHT query budget (SPEC-FIX-1109, ДР-5) | 64 queries per lookup in total, shared by all paths; code counts per path (audit/PA-FIX-2) | dht §4 |
+| cold DHT entries (SPEC-FIX-1109, ДР-6/7) | cold records do not count as the 20 closest and are not served until refreshed; empty buckets are refreshed too; code skips empty buckets (audit/PA-FIX-2) | dht §3, §5 |
+| ×3 diversity in rate limits (SPEC-FIX-1109) | the factor of 3 multiplies the rate cost too, not only the stored-data quota | services §1 |
+| suite retry keeps the offered list (SPEC-FIX-1109) | a retry sends the full original `offered` list in the original order; moving `chosen` to the front is malformed; code reorders (audit/PA-FIX-2) | handshake §3.1 |
+| noise3 path floor (SPEC-FIX-1109, ТЕО T3.12/T6.4d) | 1232 bytes is the floor for the other carriers; the 1271-byte noise3 requirement is not lowered and the inner Initial is not shrunk; a narrow path falls back to the TCP carriers | wire §2.4 |
+| 0-RTT clock (SPEC-FIX-1109) | the 60 s early-data window uses the raw clock, never the learned offset; 0-RTT is not offered in the v2.0 build | handshake §10 |
+| ws2 token address (SPEC-FIX-1109) | `a` is `host:port` for ws2 too — the `host:port` part of the card URL, not the URL | wire §3.2 |
+| reality2 gate admission (SPEC-FIX-1109, НС-2) | admission is by the 4-tuple; a NAT port change sends the packets to the cover; DCID binding is a limitation for the audit | wire §3.3 |
+| unidirectional streams (SPEC-FIX-1109, Н-8) | 64, as in Chrome; 0 would be a visible difference from the browser's transport parameters | wire §5.1 |
+| call join and signalling (SPEC-FIX-1109) | a join is a unicast to the coordinator, not flooded; the media signing key is per call, not per join; `msg_id = 0` is dropped; signalling uses the corrected clock; the 1232-byte media datagram ceiling stands until the ТЕО decision | services §9.1, §9.2 |
+| interim v1 call media (SPEC-FIX-1109, ЗВ-2) | 0.3.0 has an interim per-unit v1 signature on the signing path; the window is the time before rekey and `signers = nil`; incoming `CALL_AUTH` is discarded until T9.3c | security §4.26, §5; services §9.3 |
+| manifest absence and `min_version` (SPEC-FIX-1109, ЛВ-17/ЛВ-4) | a component not named by the latest manifest is not permitted (fail-closed); `min_version` is a strict `X.Y.Z` with no leading `v` | objects §9; versioning §5 |
+| peer clock samples (SPEC-FIX-1109, ЧР-2) | samples expire after 24 hours; a session with no usable `time` is not a recent authenticated peer for D36 | handshake §7 |
+| rules file equal `seq` (SPEC-FIX-1109, ЧР-3/AD18) | an equal `seq` is a reload; only a lower `seq` is refused | country-policy |
+| user country vs GeoIP (SPEC-FIX-1109, ЧР-6) | the user's own country (setting or platform hint) takes priority and GeoIP is the default; a peer's country is always GeoIP | wire §1.3; country-policy |

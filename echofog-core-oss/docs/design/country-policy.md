@@ -8,9 +8,12 @@ its network. Nothing here is on the wire: no frame, object or vector depends on 
 
 | Input | Source |
 |---|---|
-| own country | GeoIP (`Host.Country`) of the first public address of the client (`local_addrs`, T3.4) |
+| own country | the user's country setting on the desktop, or the platform hint on Android, when set; otherwise GeoIP (`Host.Country`) of the first public address of the client (`local_addrs`, T3.4). GeoIP is the default |
 | destination class | `domestic` (same country), `neighbor` (listed in the rules file), `foreign` (all else; unknown counts as foreign) |
 | network class | `mobile` or `wired`; a user setting on the desktop, `TRANSPORT_CELLULAR` on Android; unknown counts as wired (`Config.NetClass`, `Runtime.SetNetClass`) |
+
+A peer's country is always taken from the built-in offline GeoIP database; a user setting only
+describes the client's own country and never overrides the peer's.
 
 A `neighbor` decides exactly like `foreign` until the field measurement (T15.2a) says otherwise. The
 class exists so that the data and the connection report can name it.
@@ -53,9 +56,11 @@ object and not on the wire.
 }
 ```
 
-* `seq` is monotonic: the application passes the highest `seq` it has seen to `routepolicy.Parse`
-  and refuses an older file. An expired file changes nothing: the file can only tighten the table,
-  so the table never gets weaker with time.
+* `seq` is monotone non-decreasing: the application passes the highest `seq` it has seen to
+  `routepolicy.Parse` and refuses an older file. An **equal** `seq` is a reload: the file is read and
+  applied again (it may carry a corrected body for the same version); only a lower `seq` is refused.
+  An expired file changes nothing: the file can only tighten the table, so the table never gets
+  weaker with time.
 * The file can only tighten. A `tcp_limit` lowers (or adds) the volume of rows that have a TCP
   limit towards abroad and never raises it; `udp_denied` switches UDP off; `neighbors` and
   `mobile_asn` are data only; `allowed_cidrs` names the entries that a curator has checked from a

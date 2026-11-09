@@ -111,8 +111,11 @@ object, one encoding).
 
 **Extension rules for all object bodies.** Readers MUST ignore unknown bits of flag fields and treat an
 unknown enum value (for example a `role` value) as the documented default ("unknown": for `role`, an
-ordinary user). Count limits on repeated fields are **processing** limits: a reader uses the first N
-elements and ignores the rest; only the byte-size limit of the envelope is a validity limit.
+ordinary user). Count limits on repeated fields are **validity** limits: a reader counts every element
+up to the decoder's hard ceiling (the envelope byte limit) and rejects a body with more elements than
+the documented limit. It MUST NOT silently keep the first N and ignore the rest. The only exception is
+`next_keys` in §9, which a section explicitly calls a processing limit: there the reader keeps the
+first N and skips the rest.
 
 ## 3. Node card (`echofog/card/2`)
 
@@ -203,10 +206,13 @@ message SuiteParams {
   use noise3 (wire.md §2.1).
 - `flags.unlisted`: receivers MUST NOT pass the card to third parties (PEX, DHT `NODES` replies) and
   MUST NOT publish it. Hidden and anonymous nodes set it; they issue no public card.
-- `hs_key` and `prev_hs` MUST NOT be bound to another device ID (handshake.md §7).
+- `hs_key` and `prev_hs` become bound to a device ID **only when a handshake completes with that key**
+  (the key proves possession of the matching private key); a card alone creates no binding. A card
+  whose `hs_key` or `prev_hs` is already bound to a different signer is rejected
+  ([handshake.md](handshake.md) §7).
 - Every address with a v2 suite has a valid `mask` index; every masking key is referenced by at least
-  one address (counting all addresses). In the processed view (the first 8 masking keys, §2.3
-  extension rules), addresses whose key lies beyond the first 8 are dropped.
+  one address (counting all addresses). A card with more than 8 masking keys is invalid: the count
+  limit of §2.3 is a validity limit, so the reader rejects it and does not keep the first 8.
 - Size: the encoded envelope is at most 4096 bytes.
 
 ### 3.3 How a card travels
@@ -392,7 +398,8 @@ message Artifact {
 }
 ```
 
-**`min_version` (T12.4e).** A strict `X.Y.Z` (no leading zeros). It must not be above `version` of the same manifest (a manifest that does so is invalid). The server installer and `update` refuse a version below it and below the installed one; a deliberate rollback needs an explicit flag and never goes below `min_version`. The field is additive: a node that does not know field 8 keeps it as an unknown field, and the signatures cover it.
+**`min_version` (T12.4e).** A strict `X.Y.Z` (no leading zeros, no leading `v`, all three parts
+present). It must not be above `version` of the same manifest (a manifest that does so is invalid). The server installer and `update` refuse a version below it and below the installed one; a deliberate rollback needs an explicit flag and never goes below `min_version`. The field is additive: a node that does not know field 8 keeps it as an unknown field, and the signatures cover it.
 
 **Decision D16 (release keys, revised).** Builds carry 3 release public keys (the initial key set). The
 project maintainer holds the three private keys, each on separate offline media.
