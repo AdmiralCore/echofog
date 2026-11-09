@@ -957,3 +957,23 @@ export function VaultRequestWithdraw() {
 export function WatchStream(arg1) {
   return window['go']['main']['App']['WatchStream'](arg1);
 }
+
+export function SharingApprove(arg1, arg2) {
+  return window['go']['main']['App']['SharingApprove'](arg1, arg2);
+}
+
+export function SharingReject(arg1) {
+  return window['go']['main']['App']['SharingReject'](arg1);
+}
+
+export function SharingRevoke(arg1) {
+  return window['go']['main']['App']['SharingRevoke'](arg1);
+}
+
+export function SharingOpenFor(arg1) {
+  return window['go']['main']['App']['SharingOpenFor'](arg1);
+}
+
+export function SharingCloseOpen() {
+  return window['go']['main']['App']['SharingCloseOpen']();
+}

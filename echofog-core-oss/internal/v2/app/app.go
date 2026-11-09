@@ -137,6 +137,8 @@ type Config struct {
 	// VPNListen is the address of the local proxy, "127.0.0.1:1080" when empty.
 	Exit      ExitDialer
 	VPNListen string
+	// ExitHost runs the exit of this node (T10.9); nil turns it off.
+	ExitHost ExitHost
 	// WholeComputer holds the drivers of the whole-computer mode with its kill switch (T10.6b); nil
 	// turns the mode off.
 	WholeComputer *WholeComputerConfig
@@ -169,6 +171,7 @@ type App struct {
 	fx        fileState
 	gev       groupEvents
 	vpn       vpnState
+	exit      exitState
 	whole     wholeState
 	gc        callBook
 	vmu       sync.Mutex // the saved exits and the history

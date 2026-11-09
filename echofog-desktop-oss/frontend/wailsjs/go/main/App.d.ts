@@ -485,3 +485,13 @@ export function VaultExecuteWithdraw():Promise<string>;
 export function VaultRequestWithdraw():Promise<string>;
 
 export function WatchStream(arg1:string):Promise<void>;
+
+export function SharingApprove(arg1:string, arg2:string):Promise<void>;
+
+export function SharingReject(arg1:string):Promise<void>;
+
+export function SharingRevoke(arg1:string):Promise<void>;
+
+export function SharingOpenFor(arg1:number):Promise<void>;
+
+export function SharingCloseOpen():Promise<void>;
