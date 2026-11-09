@@ -23,9 +23,9 @@ const usageText = `echofog-node v2 — EchoFog v2 server node
 usage:
   echofog-node v2 init   [--lang ru|en]                    interactive setup (questions in the terminal)
   echofog-node v2 init   --preset relay|exit-free|home-entry --advertise IP --data DIR [--port N]
-                         [--domain NAME] [--site-dir DIR] [--yes] [--lang ru|en]
+                         [--domain NAME] [--site-dir DIR] [--cover-cert FILE] [--yes] [--lang ru|en]
   echofog-node v2 init   --data DIR --listen noise3=BIND:PORT --advertise IP [--invite-listen ...]
-                         [--roles relay,mailbox,dht-server,exit] [--cover HOST:PORT]
+                         [--roles relay,mailbox,dht-server,exit] [--cover HOST:PORT --site-dir DIR]
   echofog-node v2 run    --data DIR
   echofog-node v2 status --data DIR [--json] [--lang ru|en]
   echofog-node v2 install --binary FILE --manifest FILE [--preset relay|exit-free|home-entry --advertise IP]

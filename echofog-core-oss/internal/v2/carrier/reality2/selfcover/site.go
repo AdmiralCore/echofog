@@ -25,6 +25,11 @@ type Content struct {
 	Proxy string
 }
 
+// Handler builds the website handler for a caller that serves the same site on another listener
+// (the ws2 fallback site, a probe endpoint or the operator's own reverse proxy). warnings lists
+// what the operator should fix without it stopping the node.
+func (c Content) Handler() (http.Handler, []string, error) { return c.handler() }
+
 // handler builds the website handler. warnings lists what the operator should fix without it
 // stopping the node: an empty folder serves nothing worth a visitor and is the first thing a
 // prober's second request would notice.

@@ -8,6 +8,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
 	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
+	"github.com/echofog/echofog-core/internal/v2/carrier/ws2"
 	"github.com/echofog/echofog-core/internal/v2/shape"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
@@ -74,6 +75,12 @@ func suiteRegistry(cfg Config, clock carrier.Clock) (*carrier.Registry, error) {
 	noise3.NewDialer(noise3.DialerConfig{Clock: clock}).Register(reg)
 	if err := reality2.Register(reg, reality2.NewDialer(reality2.DialerConfig{Now: clock.Now}), nil); err != nil {
 		return nil, fmt.Errorf("node: reality2 dialer: %w", err)
+	}
+	if err := reality2.RegisterTCP(reg, reality2.NewTCPDialer(reality2.TCPDialerConfig{Now: clock.Now}), nil); err != nil {
+		return nil, fmt.Errorf("node: reality2-tcp dialer: %w", err)
+	}
+	if err := ws2.Register(reg, ws2.NewDialer(ws2.DialerConfig{Now: clock.Now}), nil); err != nil {
+		return nil, fmt.Errorf("node: ws2 dialer: %w", err)
 	}
 	return reg, nil
 }

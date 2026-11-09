@@ -261,17 +261,29 @@ func TestUnitFileIsHardened(t *testing.T) {
 }
 
 func TestFirewallAdvice(t *testing.T) {
-	cfg, _, _ := servernode.BuildPreset(servernode.PresetHomeEntry, servernode.PresetOptions{Advertise: "203.0.113.10", Port: 443})
+	// The own-cover preset: reality2-quic (UDP) and reality2-tcp (TCP) on 443, noise3 on 444.
+	cfg, _, _ := servernode.BuildPreset(servernode.PresetRelay, servernode.PresetOptions{
+		Advertise: "203.0.113.10", Port: 443, Domain: "example.org", SiteDir: "/srv/site",
+	})
 	for _, lang := range []string{"en", "ru"} {
 		adv := strings.Join(servernode.FirewallAdvice(lang, cfg), "\n")
-		for _, want := range []string{"ufw allow 443/udp", "ufw allow 444/udp", "firewall-cmd", "443/udp", "doctor"} {
+		for _, want := range []string{"ufw allow 443/udp", "ufw allow 443/tcp", "ufw allow 444/udp", "firewall-cmd", "443/udp", "443/tcp", "doctor"} {
 			if !strings.Contains(adv, want) {
 				t.Errorf("%s advice lacks %q:\n%s", lang, want, adv)
 			}
 		}
+		if strings.Contains(adv, "444/tcp") {
+			t.Errorf("%s advice opens TCP 444, which no listener uses:\n%s", lang, adv)
+		}
 		if hasCyrillic(adv) != (lang == "ru") {
 			t.Errorf("%s advice language", lang)
 		}
+	}
+	// ws2 is plain HTTP behind a CDN: its bind is a TCP port too.
+	cfg.Listen = append(cfg.Listen, servernode.ListenSpec{Suite: "ws2", Bind: "0.0.0.0:8443", Advertise: "203.0.113.10"})
+	adv := strings.Join(servernode.FirewallAdvice("en", cfg), "\n")
+	if !strings.Contains(adv, "ufw allow 8443/tcp") || strings.Contains(adv, "8443/udp") {
+		t.Errorf("ws2 advice is not TCP-only:\n%s", adv)
 	}
 	// The operator API port is never advised: it is loopback only.
 	cfg.Operator.Addr = "127.0.0.1:9999"
