@@ -40,6 +40,12 @@ func TestParseConfigGood(t *testing.T) {
 	if _, err := servernode.ParseConfig([]byte(local)); err != nil {
 		t.Fatalf("loopback advertise: %v", err)
 	}
+	// T5.6: the operator's own entry list is a field of server.json.
+	boot := strings.Replace(goodConfig, `"roles"`, `"bootstrap": ["noise3://192.0.2.10:4430?mask=0202020202020202020202020202020202020202020202020202020202020202"], "roles"`, 1)
+	c, err = servernode.ParseConfig([]byte(boot))
+	if err != nil || len(c.Bootstrap) != 1 {
+		t.Fatalf("bootstrap field: %+v, %v", c, err)
+	}
 }
 
 // T2.6e: the camouflaged suites are accepted together with the own cover; UDP and TCP may share

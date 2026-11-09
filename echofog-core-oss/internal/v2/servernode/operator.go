@@ -33,9 +33,12 @@ type StatusInfo struct {
 	PublicCard bool     `json:"public_card"`
 	// PublicLink is the join link of the public card (D37): set only when a camouflaged
 	// listener made the node publishable.
-	PublicLink string   `json:"public_link,omitempty"`
-	Warnings   []string `json:"warnings,omitempty"`
-	Listen     []string `json:"listen,omitempty"`
+	PublicLink string `json:"public_link,omitempty"`
+	// ListEntry is the line the owner puts into the official entry list (T5.6): the public card
+	// link of this node, the same string as PublicLink when the node has a public card.
+	ListEntry string   `json:"list_entry,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	Listen    []string `json:"listen,omitempty"`
 	// CoverCertNotAfter is the expiry of the cover certificate the running node serves, as Unix
 	// seconds; zero when no certificate is installed yet. The doctor reports its term.
 	CoverCertNotAfter int64 `json:"cover_cert_not_after,omitempty"`

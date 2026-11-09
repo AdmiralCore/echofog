@@ -238,6 +238,9 @@ func cmdStatus(args []string, env func(string) string, out io.Writer) error {
 	if st.PublicLink != "" {
 		fmt.Fprintln(out, tr(lang, "публичная ссылка:", "public link: "), st.PublicLink)
 	}
+	if st.ListEntry != "" {
+		fmt.Fprintln(out, tr(lang, "строка для списка узлов входа:", "bootstrap list entry:            "), st.ListEntry)
+	}
 	for _, w := range st.Warnings {
 		fmt.Fprintln(out, tr(lang, "предупреждение:", "warning:       "), w)
 	}

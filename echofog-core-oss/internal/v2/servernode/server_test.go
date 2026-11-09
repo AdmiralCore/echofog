@@ -223,6 +223,9 @@ func TestServerWithCoverHasPublicLink(t *testing.T) {
 	if !strings.HasPrefix(st.PublicLink, "echofog://join?") {
 		t.Fatalf("public link %q", st.PublicLink)
 	}
+	if st.ListEntry != st.PublicLink {
+		t.Fatalf("the list entry %q is not the public card link %q", st.ListEntry, st.PublicLink)
+	}
 }
 
 func writeCertKey(t *testing.T, domain, dir string) string {
