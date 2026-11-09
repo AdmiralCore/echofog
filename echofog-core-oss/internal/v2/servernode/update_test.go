@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -20,6 +22,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 	"github.com/echofog/echofog-core/internal/v2/release"
+	"github.com/echofog/echofog-core/internal/v2/releasekeys"
 	"github.com/echofog/echofog-core/internal/v2/servernode"
 )
 
@@ -134,6 +137,38 @@ func TestCheckUpdateFindsANewerVersion(t *testing.T) {
 	r.deps.CurrentVersion = "0.4.0"
 	if info, err := servernode.CheckUpdate(context.Background(), r.deps); err != nil || info != nil {
 		t.Fatalf("same version: %v, %v", info, err)
+	}
+}
+
+// A key list parsed the way a release build receives it must reach CheckUpdate: the update is
+// refused as "no release keys" only when the build has none. This is the fail-closed half of
+// T12.4e-fix: without a build-time key list setup/update must refuse everything.
+func TestBuildKeysGateUpdate(t *testing.T) {
+	r := newUpdRig(t)
+	ctx := context.Background()
+	spec := strings.Join([]string{
+		base64.StdEncoding.EncodeToString(r.signers[0].Public().Key()),
+		base64.RawURLEncoding.EncodeToString(r.signers[1].Public().Key()),
+		strings.ToUpper(hex.EncodeToString(r.signers[2].Public().Key())),
+	}, " , ")
+	ks, err := releasekeys.ParseSpec(spec)
+	if err != nil || len(ks) != 3 {
+		t.Fatalf("ParseSpec: %d keys, %v", len(ks), err)
+	}
+	mgr, err := release.Open(release.Config{Keys: ks, Clock: updClock{}})
+	if err != nil {
+		t.Fatalf("release.Open with the parsed build keys: %v", err)
+	}
+	deps := r.deps
+	deps.Manager = mgr
+	if _, err := servernode.CheckUpdate(ctx, deps); err != nil {
+		t.Fatalf("CheckUpdate with the build keys: %v", err)
+	}
+
+	// No keys (an OSS build): the update refuses before it fetches anything.
+	deps.Manager = nil
+	if _, err := servernode.CheckUpdate(ctx, deps); !errors.Is(err, servernode.ErrNoReleaseKeys) {
+		t.Fatalf("CheckUpdate without build keys = %v, want ErrNoReleaseKeys", err)
 	}
 }
 

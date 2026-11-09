@@ -1,12 +1,26 @@
 BINARY  := bin/echofog-node
 VERSION ?= dev
 
+# Release public keys baked into the binary (T12.4e-fix). An OSS build leaves RELEASE_KEYS empty:
+# the binary then has no release keys and setup/update and the built-in entry list fail closed.
+# A release build passes the keys of the release owner, comma-separated, no spaces:
+#   make build VERSION=0.3.0 RELEASE_KEYS='<key1>,<key2>,<key3>'
+# Each key is an Ed25519 public key in base64 or hex (see docs/release-trust.md). The same list is
+# given to deploy/v2/install.sh via `efv2-release install-stamp --keys`.
+RELEASE_KEYS ?=
+RELEASE_KEY_FLAGS :=
+ifneq ($(strip $(RELEASE_KEYS)),)
+RELEASE_KEY_FLAGS += -X github.com/echofog/echofog-core/internal/v2/servernode.releaseKeysSpec=$(RELEASE_KEYS)
+RELEASE_KEY_FLAGS += -X github.com/echofog/echofog-core/internal/v2/bootstrap.releaseKeysSpec=$(RELEASE_KEYS)
+endif
+LDFLAGS := -s -w -X main.version=$(VERSION) $(RELEASE_KEY_FLAGS)
+
 .PHONY: all build test test-race test-calls test-calls-4k test-calls-tcp test-tun vet lint vuln fuzz testbed testbed-chaos mobile-aar clean
 
 all: build
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o $(BINARY) ./cmd/echofog-node
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/echofog-node
 
 test:
 	go test ./... -count=1
