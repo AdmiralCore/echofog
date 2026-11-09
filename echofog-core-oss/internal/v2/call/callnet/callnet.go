@@ -269,15 +269,25 @@ func (t *Transport) DeliverSignal(from [32]byte, v1 []byte) {
 	}
 }
 
-// Relayed reports whether the participant is reached only through a relay, so the call layer
-// stretches its watchdogs for the extra hop. Under call_route=direct a relay path carries no
-// media, so the peer is not "relayed".
+// Relayed reports whether the participant is reached through a relay, so the call layer stretches
+// its watchdogs for the extra hop. Under call_route=relay media takes the relay path even when a
+// direct session exists (the signalling stream is usually direct): such a peer is relayed too.
+// A peer with no relay path is not: media cannot go to it at all. Under call_route=direct a relay
+// path carries no media, so the peer is not "relayed"; under Auto it is only when that is the only
+// path.
 func (t *Transport) Relayed(peer types.PeerID) bool {
 	l, ok := t.cfg.Links.Link(peer)
-	if !ok || t.route() == route.Direct {
+	if !ok {
 		return false
 	}
-	return route.OnlyRelayed(l.PathKinds())
+	kinds := l.PathKinds()
+	switch t.route() {
+	case route.Direct:
+		return false
+	case route.Relay:
+		return kinds[mux.PathRelay] > 0
+	}
+	return route.OnlyRelayed(kinds)
 }
 
 // DirectLink reports whether the call layer should not ask for a connection to the peer. Under
