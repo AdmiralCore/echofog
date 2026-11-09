@@ -29,6 +29,9 @@ var ErrSetupCancelled = errors.New("servernode: setup cancelled, nothing was cha
 // SetupIsTerminal says whether stdin is a terminal. Tests replace it.
 var SetupIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
+// SetupAdvertise proposes the address of the machine for the setup questions. Tests replace it.
+var SetupAdvertise = detectAdvertise
+
 // SetupFirewallProbe and SetupHealth are seams of the setup command: tests use them for the
 // firewall and the health steps. Nil means the real host.
 var (
@@ -460,7 +463,7 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 	seed.BandwidthMbps, seed.Sessions = *bandwidth, *sessions
 	switch {
 	case interactive:
-		p, err := RunSetupTUI(ctx, UIOptions{
+		res, err := SetupTUI(ctx, UIOptions{
 			Lang: lang, Advertise: seed.Advertise, DataDir: *data, Port: *port, Color: color, Seed: seed,
 		}, UIDeps{Version: BuildVersion, Checks: checks, Apply: apply})
 		if err != nil {
@@ -470,7 +473,7 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 			}
 			return err
 		}
-		plan = p
+		plan = res.Plan
 	case *yes:
 		if *presetName == "" || *advertise == "" {
 			return usageError{errors.New("--yes needs --preset and --advertise")}

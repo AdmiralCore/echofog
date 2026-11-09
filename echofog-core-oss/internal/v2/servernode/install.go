@@ -28,6 +28,8 @@ var (
 	ErrAlreadyInstalled = errors.New("servernode: a node is already installed here; use update")
 	// ErrBadUser: not a safe system user name.
 	ErrBadUser = errors.New("servernode: bad service user name")
+	// ErrInstallStopped: the operator stopped the installer; what was done was taken back.
+	ErrInstallStopped = errors.New("servernode: installation stopped by the operator; what was done was rolled back")
 )
 
 // Fixed layout of an installation (relative to InstallDeps.Root).

@@ -98,12 +98,26 @@ type setupModel struct {
 	phraseIn  string
 	quit      bool
 	cancelled bool
+	applied   bool
 }
+
+// SetupTUIResult is what the full-screen setup returns: the plan the operator confirmed, the
+// final screen (after a successful apply) and whether the plan is already applied. A caller must
+// not apply an applied plan a second time.
+type SetupTUIResult struct {
+	Plan    *SetupPlan
+	Info    *FinalInfo
+	Applied bool
+}
+
+// SetupTUI is the full-screen setup run by the command; tests replace it to drive the interactive
+// branch without a terminal.
+var SetupTUI = RunSetupTUI
 
 // RunSetupTUI runs the full-screen setup and returns the plan the operator confirmed. It returns
 // ErrSetupCancelled when the operator left before applying; after that point the model applies the
 // plan itself and returns it with the node running.
-func RunSetupTUI(ctx context.Context, opts UIOptions, deps UIDeps) (*SetupPlan, error) {
+func RunSetupTUI(ctx context.Context, opts UIOptions, deps UIDeps) (*SetupTUIResult, error) {
 	m := newSetupModel(ctx, opts, deps)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	out, err := p.Run()
@@ -114,13 +128,19 @@ func RunSetupTUI(ctx context.Context, opts UIOptions, deps UIDeps) (*SetupPlan, 
 	if !ok {
 		return nil, errors.New("servernode: setup screen returned nothing")
 	}
-	if final.cancelled {
+	return final.result()
+}
+
+// result turns the finished model into the value the command uses. A cancelled run is the only
+// one that means "nothing was changed"; a failure after the first change is a failure.
+func (m *setupModel) result() (*SetupTUIResult, error) {
+	if m.cancelled {
 		return nil, ErrSetupCancelled
 	}
-	if final.err != nil {
-		return nil, final.err
+	if m.err != nil {
+		return nil, m.err
 	}
-	return final.plan(), nil
+	return &SetupTUIResult{Plan: m.plan(), Info: m.final, Applied: m.applied}, nil
 }
 
 func newSetupModel(ctx context.Context, opts UIOptions, deps UIDeps) *setupModel {
