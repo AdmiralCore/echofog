@@ -10,16 +10,19 @@ import (
 // Tick reads the device and the envelope of an outgoing item in attempt; a received init drops those
 // envelopes in invalidate under s.mu. Reading them bare raced on the slice header (ЧМ-6). The stress
 // loop keeps both sides running so -race sees the unsynchronised access; the fix reads them under
-// s.mu.
+// s.mu. The mailbox Deposit path (the second bare read of it.Env) is reached too: delivery fails and
+// Mail.Deposit keeps failing, so the item stays in StateWaiting instead of parking in the mailbox.
 func TestOutboxEnvelopeReadIsSynchronisedWithIncomingWrites(t *testing.T) {
 	w := newWorld(t)
 	a, b := w.newPeer(), w.newPeer()
 	w.send(a, b, "hello")
 	w.tick(a) // b has a session with a
 
-	// b has an outgoing item with a built envelope; a is unreachable, so the item stays active
+	// b has an outgoing item with a built envelope; a is unreachable and the mailbox keeps failing,
+	// so every attempt goes through both the Deliver read and the Mail.Deposit read.
 	w.mu.Lock()
 	w.down[a.self.Device] = true
+	w.mailDown = true
 	w.mu.Unlock()
 	w.send(b, a, "queued")
 	w.tick(b)
@@ -31,9 +34,13 @@ func TestOutboxEnvelopeReadIsSynchronisedWithIncomingWrites(t *testing.T) {
 			it = x
 		}
 	}
+	waiting := it != nil && it.State == StateWaiting
 	b.svc.mu.Unlock()
 	if it == nil {
 		t.Fatal("no outgoing item")
+	}
+	if !waiting {
+		t.Fatal("the item left StateWaiting: the Mail.Deposit path is not exercised")
 	}
 
 	stop := make(chan struct{})
