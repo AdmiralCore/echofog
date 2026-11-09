@@ -137,9 +137,17 @@ func (b *Bridge) remember(k wkey, raw []byte) {
 	defer b.mu.Unlock()
 	if e, ok := b.wrapper[k]; ok {
 		// A stalled path can carry the same signal again long after the first copy: keeping the
-		// arrival time fresh is what lets the forward that follows still find its wrapper.
+		// arrival time fresh, and the wrapper as the newest, is what lets the forward that follows
+		// still find it instead of evicting the signal that is still in use.
 		e.at = now
 		b.wrapper[k] = e
+		for i, key := range b.order {
+			if key == k {
+				b.order = append(b.order[:i], b.order[i+1:]...)
+				break
+			}
+		}
+		b.order = append(b.order, k)
 		return
 	}
 	for len(b.order) > 0 &&
