@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -42,6 +43,10 @@ func TestV2LogsCarryNoScenarioData(t *testing.T) {
 	a.other, b.other = b, a
 	logs := &syncLog{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// The v2 runtime takes NodeApi.Logger when it is built, so the guard swaps this field as well
+	// as the node logger (the facade's own paths still write through n.node.Logger).
+	a.api.Logger = logger
+	b.api.Logger = logger
 	a.node.Logger = logger
 	b.node.Logger = logger
 	a.start()
@@ -52,13 +57,23 @@ func TestV2LogsCarryNoScenarioData(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return strings.Contains(logs.String(), "dht: publication")
 	}, 10*time.Second, 50*time.Millisecond, "the captured log must carry the v2 runtime's own lines")
+	// The full device IDs are as forbidden as the scenario text: the log may shorten them, never
+	// print them whole.
+	var secrets []string
+	for _, p := range []*v2Peer{a, b} {
+		p.api.v2l.Lock()
+		s := p.api.v2s
+		p.api.v2l.Unlock()
+		require.NotNil(t, s)
+		secrets = append(secrets, fmt.Sprintf("%x", s.device.ID()))
+	}
 	aSeesB, bSeesA := befriend(t, a, b)
 	logs.Reset() // startup is not the scenario
 
 	v2StepExchange(t, a, b, aSeesB, bSeesA)
 
 	text := logs.String()
-	for _, secret := range []string{
+	secrets = append(secrets,
 		"привет через v2", // the message
 		"привет.bin",      // the file name
 		"Команда",         // the group name
@@ -69,7 +84,8 @@ func TestV2LogsCarryNoScenarioData(t *testing.T) {
 		"127.0.0.1", // the addresses of the in-process harness
 		"203.0.113.10",
 		"example.com",
-	} {
+	)
+	for _, secret := range secrets {
 		require.NotContains(t, text, secret, "the log must not carry scenario data")
 	}
 }
