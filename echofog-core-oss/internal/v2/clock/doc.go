@@ -11,10 +11,12 @@
 // # Peer offset
 //
 // AddOutgoingSample records the time one peer of a session this node dialed reported. Incoming
-// sessions give no sample. The clock keeps one sample per /16 network (IPv6: /32), the last five
-// networks; a newer sample from a network replaces its previous one. The offset is the median of
-// the samples and is used only when at least 3 networks gave samples. One update moves it by at most
-// 120 s and it never exceeds 600 s from the raw clock; a larger correction needs the CDN check.
+// sessions give no sample, and neither does a session that carried no usable time. A sample stays
+// valid for 24 hours: older samples are discarded and no longer hold the offset. The clock keeps
+// one sample per /16 network (IPv6: /32), the last five networks; a newer sample from a network
+// replaces its previous one. The offset is the median of the samples and is used only when at
+// least 3 live networks gave samples. One update moves it by at most 120 s and it never exceeds
+// 600 s from the raw clock; a larger correction needs the CDN check.
 //
 // With an even number of samples the median is the midpoint of the two central values, applied only
 // when they agree within 2 s; otherwise there is no estimate and the offset drifts back to the raw
