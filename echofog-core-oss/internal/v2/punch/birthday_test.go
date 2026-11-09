@@ -377,10 +377,9 @@ func TestConcurrentCap(t *testing.T) {
 }
 
 // countNet is a SockNet that counts every datagram its sockets send and can deliver one datagram
-// from the peer's IP in the middle of the run, at a chosen count. It is used to check the budget of
-// services.md §6.4.1 on the last possible datagram.
+// back from the address it was sent to, in the middle of the run, at a chosen count. It is used to
+// check the budget of services.md §6.4.1 on the last possible datagram.
 type countNet struct {
-	peer     netip.AddrPort
 	injectAt int
 	mu       sync.Mutex
 	sent     int
@@ -409,7 +408,7 @@ func (n *countNet) count() int {
 	return n.sent
 }
 
-func (s *countSock) Send(_ netip.AddrPort, _ []byte) error {
+func (s *countSock) Send(to netip.AddrPort, _ []byte) error {
 	n := s.n
 	n.mu.Lock()
 	n.sent++
@@ -417,7 +416,7 @@ func (s *countSock) Send(_ netip.AddrPort, _ []byte) error {
 	n.mu.Unlock()
 	if at == n.injectAt {
 		select {
-		case s.recv <- Datagram{From: n.peer, Payload: make([]byte, 40)}:
+		case s.recv <- Datagram{From: to, Payload: make([]byte, 40)}:
 		default:
 		}
 	}
@@ -428,24 +427,28 @@ func (s *countSock) Recv() <-chan Datagram { return s.recv }
 func (s *countSock) Close() error          { return nil }
 
 // The reply junk of dial and mutual is a punching datagram like every other: a hit on the last
-// datagram of the budget still leaves 960 in all, never 961. The first case injects a hit on the
-// last budgeted datagram (the reply must fit after it); the second injects past the budget and only
-// requires that the cap holds.
+// datagram of the budget still leaves 960 in all, never 961. Each mode runs two cases: a hit on the
+// last budgeted datagram (the reply must fit after it) and a hit past the budget (the cap holds).
+// Mutual is checked on its own line: dial alone would not catch a mutual that spends the whole 960
+// before answering, because that answer would be the 961st datagram.
 func TestReplyJunkCountsTowardsLimit(t *testing.T) {
 	cases := []struct {
 		name     string
+		mode     Mode
 		injectAt int
 		wantHit  bool
 	}{
-		{"last datagram of the budget", MaxPunchPackets - 1, true},
-		{"past the budget", MaxPunchPackets, false},
+		{"dial: last datagram of the budget", ModeDial, MaxPunchPackets - 1, true},
+		{"dial: past the budget", ModeDial, MaxPunchPackets, false},
+		{"mutual: last datagram of the budget", ModeMutual, MaxPunchPackets - 1, true},
+		{"mutual: past the budget", ModeMutual, MaxPunchPackets, false},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			clk := newFakeClock()
 			peer := netip.MustParseAddrPort("203.0.113.5:50000")
-			n := &countNet{peer: peer, injectAt: tc.injectAt}
+			n := &countNet{injectAt: tc.injectAt}
 			b := NewBirthday(BirthdayConfig{Clock: clk, Net: n,
 				Rand: func(v int64) int64 { return v / 2 }, Gates: openGates()})
 			done := make(chan struct{})
@@ -454,7 +457,11 @@ func TestReplyJunkCountsTowardsLimit(t *testing.T) {
 				err error
 			)
 			go func() {
-				h, err = b.Dial(context.Background(), peer, true)
+				if tc.mode == ModeMutual {
+					h, err = b.Mutual(context.Background(), peer.Addr(), 40000, 41999)
+				} else {
+					h, err = b.Dial(context.Background(), peer, true)
+				}
 				close(done)
 			}()
 			start := clk.Now()
