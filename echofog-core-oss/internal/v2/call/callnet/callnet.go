@@ -69,6 +69,12 @@ const maxSources = 1024
 // Stats counts what Deliver dropped and what could not be sent.
 type Stats struct {
 	DroppedRoute, DroppedAdmit, DroppedUnknown, DroppedRate, SendNoPath uint64
+	// SignalRefused counts signals the signal port refused, SignalReasons says why (a stable name
+	// per reason), and LastSignalError keeps the last error text: a refused path report is not a
+	// silent loss.
+	SignalRefused   uint64
+	SignalReasons   map[string]uint64
+	LastSignalError string
 }
 
 // Transport is the call layer's transport over v2 sessions.

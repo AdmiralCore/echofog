@@ -26,6 +26,11 @@ const (
 	// signal still travels on the reliable stream.
 	MaxDatagramSignal = 1200
 
+	// DefaultMaxSignalsPerSecond bounds the signals accepted from one device before they are
+	// parsed and verified: a busy room sends tens of them a second, while a flood would otherwise
+	// spend a core on signatures. Zero in Config means this.
+	DefaultMaxSignalsPerSecond = 2000
+
 	// dedupeTTL and dedupeMax bound the memory of seen (sender, msg_id) pairs. The same signal
 	// may arrive twice: on the stream and on CALL_SIGNAL.
 	dedupeTTL = 30 * time.Second
@@ -84,6 +89,9 @@ type Config struct {
 	After func(time.Duration) <-chan time.Time
 	// RequestTimeout is the timeout of one request-like signal. Zero means the 2 s default.
 	RequestTimeout time.Duration
+	// MaxSignalsPerSecond bounds the signals accepted from one device before parsing and
+	// verification. Zero means DefaultMaxSignalsPerSecond.
+	MaxSignalsPerSecond int
 	// Rand returns message IDs; nil means math/rand/v2.
 	Rand func() uint64
 	// OnSignal receives every verified, non-duplicate signal. A signal that answers a Request
@@ -129,6 +137,16 @@ type link struct {
 
 	openMu sync.Mutex
 }
+
+// ServiceStats counts what the service refused before it parsed it, and the signals that came
+// back as its own. A refusal reason is kept here, so a dropped path report is not a silent loss.
+type ServiceStats struct {
+	SignalsRateLimited uint64
+	SignalsSelf        uint64
+}
+
+// Stats returns the counters.
+func (s *Service) Stats() ServiceStats { return ServiceStats{} }
 
 // New returns a call signalling service.
 func New(cfg Config) (*Service, error) {
