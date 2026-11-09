@@ -491,7 +491,12 @@ func (s *Service) attempt(ctx context.Context, it *item, lookups map[[32]byte]lo
 		_ = s.persist(it)
 		s.mu.Unlock()
 	}
-	status, err := s.cfg.Link.Deliver(ctx, it.Device, it.Env)
+	// A received Reset (forceFresh) or a new session (invalidate) may drop the envelope concurrently:
+	// read the device and the envelope under the same lock they are written with (ЧМ-6).
+	s.mu.Lock()
+	device, env := it.Device, it.Env
+	s.mu.Unlock()
+	status, err := s.cfg.Link.Deliver(ctx, device, env)
 	if err == nil {
 		switch status {
 		case chatpb.StatusOK, chatpb.StatusDuplicate:
