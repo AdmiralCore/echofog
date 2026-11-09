@@ -25,6 +25,10 @@ import (
 // path, wire.md 6.5). A larger frame is refused with transport.ErrDatagramTooLarge.
 const MaxDatagram = 1232
 
+// DatagramFloor tells the call layer what one datagram carries on this transport (the v2 floor,
+// not the v1 1242-byte budget): media seals its fragments to fit instead of losing full ones.
+func (t *Transport) DatagramFloor() int { return MaxDatagram }
+
 var (
 	// ErrNoLink: no live session with the participant.
 	ErrNoLink = errors.New("callnet: no session with the peer")
