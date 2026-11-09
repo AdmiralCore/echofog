@@ -395,6 +395,8 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 	if len(pos) != 0 {
 		return usageError{fmt.Errorf("unexpected arguments: %v", pos)}
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	lang := langOf(*langFlag, env)
 	if len(ReleaseKeys) == 0 {
 		return errors.New(Message(lang, "update.no-keys"))
@@ -451,16 +453,19 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 	}
 
 	var plan *SetupPlan
+	// The flags always seed the answers, in every mode. The wizard asks about what it needs and
+	// the flags win over its answers; --yes takes the seed as it is.
 	seed := DefaultAnswers(PresetRelay, lang, *advertise, *port, *data)
 	if *presetName != "" {
-		seed = DefaultAnswers(Preset(*presetName), lang, *advertise, *port, *data)
-		seed.Domain, seed.SiteDir, seed.CoverCert = *domain, *siteDir, *coverCert
-		seed.Roles = splitList(*roles)
-		seed.Carriers = splitList(*carriers)
-		seed.Invites = *invites
-		seed.OpenPorts = *openPorts
+		seed.Preset = Preset(*presetName)
 	}
+	seed.Domain, seed.SiteDir, seed.CoverCert = *domain, *siteDir, *coverCert
+	seed.Roles, seed.Carriers = splitList(*roles), splitList(*carriers)
+	seed.Invites, seed.OpenPorts = *invites, *openPorts
 	seed.BandwidthMbps, seed.Sessions = *bandwidth, *sessions
+	if seed.Advertise == "" {
+		seed.Advertise = SetupAdvertise()
+	}
 	switch {
 	case interactive:
 		res, err := SetupTUI(ctx, UIOptions{
@@ -473,7 +478,14 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 			}
 			return err
 		}
+		if res == nil || res.Plan == nil {
+			return errors.New("servernode: the setup screen returned no plan")
+		}
 		plan = res.Plan
+		if res.Applied {
+			// The screen owns the apply: a second Install would see the fresh profile and fail.
+			return printPlainFinal(out, plan, res.Info)
+		}
 	case *yes:
 		if *presetName == "" || *advertise == "" {
 			return usageError{errors.New("--yes needs --preset and --advertise")}
@@ -486,19 +498,58 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 	default:
 		// Plain mode: the line-by-line wizard, then one summary and one confirmation. One buffered
 		// reader serves both, so piped answers are not lost between the questions and the confirm.
-		if *advertise == "" {
-			*advertise = detectAdvertise()
-		}
 		br := bufio.NewReader(stdin)
-		res, err := runWizard(br, out, WizardDefaults{Lang: lang, Advertise: *advertise, Port: *port, DataDir: *data})
+		res, err := runWizard(br, out, WizardDefaults{Lang: lang, Advertise: seed.Advertise, Port: seed.Port, DataDir: seed.DataDir})
 		if err != nil {
 			return err
 		}
 		answers := DefaultAnswers(res.Preset, res.Lang, res.Opts.Advertise, res.Opts.Port, res.DataDir)
 		answers.Domain, answers.SiteDir = res.Opts.Domain, res.Opts.SiteDir
 		answers.Invites = res.Config.InviteListen != nil
-		answers.OpenPorts = *openPorts
-		answers.BandwidthMbps, answers.Sessions = *bandwidth, *sessions
+		answers.Start = res.Start
+		// The flags are the same installer as --yes: an explicit flag wins over the wizard answer.
+		if given["lang"] {
+			answers.Lang = lang
+		}
+		if given["preset"] {
+			answers.Preset = Preset(*presetName)
+		}
+		if given["domain"] {
+			answers.Domain = *domain
+		}
+		if given["site-dir"] {
+			answers.SiteDir = *siteDir
+		}
+		if given["cover-cert"] {
+			answers.CoverCert = *coverCert
+		}
+		if given["carriers"] {
+			answers.Carriers = splitList(*carriers)
+		}
+		if given["roles"] {
+			answers.Roles = splitList(*roles)
+		}
+		if given["invite"] {
+			answers.Invites = *invites
+		}
+		if given["open-ports"] {
+			answers.OpenPorts = *openPorts
+		}
+		if given["bandwidth"] {
+			answers.BandwidthMbps = *bandwidth
+		}
+		if given["sessions"] {
+			answers.Sessions = *sessions
+		}
+		if given["advertise"] {
+			answers.Advertise = *advertise
+		}
+		if given["port"] {
+			answers.Port = *port
+		}
+		if given["data"] {
+			answers.DataDir = *data
+		}
 		p, err := PlanFromAnswers(answers)
 		if err != nil {
 			return err
@@ -516,6 +567,9 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 			fmt.Fprintln(out, Message(plan.Lang, "setup.cancelled"))
 			return nil
 		}
+	}
+	if plan == nil {
+		return errors.New("servernode: the setup produced no plan")
 	}
 
 	progress := func(step string) {
@@ -577,9 +631,14 @@ func printPlainFinal(out io.Writer, plan *SetupPlan, info *FinalInfo) error {
 	if info.InviteLink != "" {
 		fmt.Fprintln(out, Message(plan.Lang, "setup.done.invite", info.InviteLink))
 	}
-	fmt.Fprintln(out, Message(plan.Lang, "setup.done.phrase-file", filepath.ToSlash(recoveryPath(plan.DataDir))))
-	fmt.Fprintln(out, Message(plan.Lang, "setup.done.token-file", filepath.ToSlash(filepath.Join(plan.DataDir, tokenFileName))))
-	fmt.Fprintln(out, Message(plan.Lang, "setup.done.status", plan.DataDir))
+	// The installer decides where the profile really lives; the wizard answer may differ.
+	dataDir := plan.DataDir
+	if info.DataDir != "" {
+		dataDir = info.DataDir
+	}
+	fmt.Fprintln(out, Message(plan.Lang, "setup.done.phrase-file", filepath.ToSlash(recoveryPath(dataDir))))
+	fmt.Fprintln(out, Message(plan.Lang, "setup.done.token-file", filepath.ToSlash(filepath.Join(dataDir, tokenFileName))))
+	fmt.Fprintln(out, Message(plan.Lang, "setup.done.status", dataDir))
 	for _, w := range info.Warnings {
 		fmt.Fprintln(out, "  "+w)
 	}
@@ -615,20 +674,25 @@ func applySetup(ctx context.Context, d InstallDeps, plan SetupPlan, progress fun
 		return nil, err
 	}
 	at := func(p string) string { return filepath.Join(d.Root, filepath.FromSlash(p)) }
-	info := &FinalInfo{Version: res.Version, DataDir: res.DataDir, Phrase: res.Phrase, Advice: res.Advice}
+	dataDir := at(res.DataDir)
+	info := &FinalInfo{Version: res.Version, DataDir: dataDir, Phrase: res.Phrase, Advice: res.Advice}
 	// The phrase goes to a private file: the full-screen mode shows it once and deletes the file
-	// after the operator confirms, the plain mode leaves it for the operator to copy.
-	if err := writePrivate(filepath.Join(at(res.DataDir), "recovery-phrase.txt"), []byte(res.Phrase+"\n")); err != nil {
-		return nil, err
+	// after the operator confirms, the plain mode leaves it for the operator to copy. The install
+	// already succeeded, so a failed write is a warning about the file, never a rollback: the
+	// phrase is still on the final screen of the full-screen mode.
+	if err := writePrivate(filepath.Join(dataDir, "recovery-phrase.txt"), []byte(res.Phrase+"\n")); err != nil {
+		info.Warnings = append(info.Warnings, Message(plan.Lang, "setup.warn.phrase-file", err.Error()))
 	}
-	if tok, err := NewTokenFile(filepath.Join(at(res.DataDir), tokenFileName)); err == nil {
+	if tok, err := NewTokenFile(filepath.Join(dataDir, tokenFileName)); err == nil {
 		info.Token = tok
+	} else {
+		info.Warnings = append(info.Warnings, Message(plan.Lang, "setup.warn.token-file", err.Error()))
 	}
 	if !plan.Start || d.Root != "" {
 		// A test or image root has no live node to ask; the health step is the seam's business.
 		return info, nil
 	}
-	st, err := waitStatus(ctx, at(res.DataDir), 30*time.Second)
+	st, err := waitStatus(ctx, dataDir, 30*time.Second)
 	if err != nil {
 		info.Warnings = append(info.Warnings, Message(plan.Lang, "setup.warn.no-status", err.Error()))
 		return info, nil
@@ -639,7 +703,7 @@ func applySetup(ctx context.Context, d InstallDeps, plan SetupPlan, progress fun
 		info.CoverCertDays = int(time.Until(time.Unix(st.CoverCertNotAfter, 0)).Hours() / 24)
 	}
 	if plan.Config.InviteListen != nil {
-		if c, err := newClient(at(res.DataDir)); err == nil {
+		if c, err := newClient(dataDir); err == nil {
 			var res struct {
 				Link string `json:"link"`
 			}

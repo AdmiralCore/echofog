@@ -91,14 +91,16 @@ type setupModel struct {
 
 	choice int // summary: 0 apply, 1 back, 2 cancel
 
-	steps     []stepState
-	events    chan tea.Msg
-	final     *FinalInfo
-	err       error
-	phraseIn  string
-	quit      bool
-	cancelled bool
-	applied   bool
+	steps       []stepState
+	events      chan tea.Msg
+	final       *FinalInfo
+	err         error
+	phraseIn    string
+	quit        bool
+	cancelled   bool
+	applied     bool
+	applyCancel context.CancelFunc
+	stopAsked   bool
 }
 
 // SetupTUIResult is what the full-screen setup returns: the plan the operator confirmed, the
@@ -229,6 +231,7 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.final = msg.info
+		m.applied = true
 		m.scr = scrDone
 		return m, nil
 	case tea.KeyMsg:
@@ -247,8 +250,7 @@ func (m *setupModel) waitEvent() tea.Cmd {
 
 func (m *setupModel) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
-		m.cancelled = true
-		return m, tea.Quit
+		return m.ctrlC()
 	}
 	switch m.scr {
 	case scrWelcome:
@@ -374,6 +376,29 @@ func (m *setupModel) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// ctrlC is honest about the state of the installation: before the first change it cancels
+// cleanly; while the apply runs it asks the installer to stop and waits for the rollback; after a
+// success or a failure it only quits, because the state is no longer "nothing was changed".
+func (m *setupModel) ctrlC() (tea.Model, tea.Cmd) {
+	switch m.scr {
+	case scrApplying:
+		if !m.stopAsked {
+			m.stopAsked = true
+			if m.applyCancel != nil {
+				m.applyCancel()
+			}
+			m.qerr = Message(m.lang, "setup.apply.stopping")
+		}
+		// The apply goroutine still sends its result; the reader started by beginApply waits for it.
+		return m, nil
+	case scrDone, scrPhrase, scrToken, scrFailed:
+		return m, tea.Quit
+	default:
+		m.cancelled = true
+		return m, tea.Quit
+	}
 }
 
 var setupRoles = []string{"relay", "mailbox", "dht-server", "exit"}
@@ -667,9 +692,12 @@ func (m *setupModel) beginApply() (tea.Model, tea.Cmd) {
 	}
 	m.scr = scrApplying
 	m.events = make(chan tea.Msg, 16)
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.applyCancel = cancel
 	plan := &p
 	go func() {
-		info, err := m.deps.Apply(m.ctx, plan, func(step string) {
+		defer cancel()
+		info, err := m.deps.Apply(ctx, plan, func(step string) {
 			m.events <- applyStepMsg{step}
 		})
 		m.events <- applyDoneMsg{info: info, err: err}
@@ -690,9 +718,7 @@ func (m *setupModel) phraseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		switch strings.ToLower(strings.TrimSpace(m.phraseIn)) {
 		case "y", "yes", "д", "да":
-			if m.final != nil {
-				_ = removeRecoveryFile(m.answers.DataDir)
-			}
+			m.removePhraseFile()
 			m.scr = scrToken
 			m.phraseIn = ""
 		default:
@@ -700,9 +726,7 @@ func (m *setupModel) phraseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyEsc:
 		// The phrase is shown once: leaving it here removes the file as well.
-		if m.final != nil {
-			_ = removeRecoveryFile(m.answers.DataDir)
-		}
+		m.removePhraseFile()
 		m.scr = scrToken
 	}
 	return m, nil
@@ -710,6 +734,19 @@ func (m *setupModel) phraseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func removeRecoveryFile(dataDir string) error {
 	return removeFile(recoveryPath(dataDir))
+}
+
+// removePhraseFile deletes the phrase where the installer actually wrote it; the wizard answer
+// only helps the tests that fill no final info.
+func (m *setupModel) removePhraseFile() {
+	if m.final == nil {
+		return
+	}
+	dir := m.final.DataDir
+	if dir == "" {
+		dir = m.answers.DataDir
+	}
+	_ = removeRecoveryFile(dir)
 }
 
 // ---- view
@@ -949,6 +986,9 @@ func (m *setupModel) viewApplying() []string {
 		}
 		lines = append(lines, mark+" "+Message(m.lang, "setup.apply.step."+s.code))
 	}
+	if m.qerr != "" {
+		lines = append(lines, "", m.qerr)
+	}
 	lines = append(lines, "", dim.Render(Message(m.lang, "setup.apply.hint")))
 	return lines
 }
@@ -995,7 +1035,7 @@ func (m *setupModel) viewPhrase() []string {
 
 func (m *setupModel) viewToken() []string {
 	accent, dim := m.style()
-	lines := []string{accent.Render(Message(m.lang, "setup.token.title")), dim.Render(Message(m.lang, "setup.token.hint")), ""}
+	lines := []string{accent.Render(Message(m.lang, "setup.token.title")), dim.Render(Message(m.lang, "setup.token.hint", tokenFileName)), ""}
 	if m.final != nil {
 		lines = append(lines, m.final.Token)
 	}

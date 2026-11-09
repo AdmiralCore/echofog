@@ -246,10 +246,22 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	}
 
 	var undo undoStack
+	// stopped reports the operator's stop after the rollback. The rollback commands run on their
+	// own context: the apply context is already cancelled.
+	stopped := func() (*InstallResult, error) {
+		undo.run()
+		if len(undo) > 0 {
+			_, _ = d.Runner.Run(context.Background(), "systemctl", "daemon-reload")
+		}
+		return nil, ErrInstallStopped
+	}
 	failed := func(step string, err error, out []byte) (*InstallResult, error) {
 		undo.run()
 		if len(undo) > 0 {
-			_, _ = d.Runner.Run(ctx, "systemctl", "daemon-reload") // the unit is gone again
+			_, _ = d.Runner.Run(context.Background(), "systemctl", "daemon-reload") // the unit is gone again
+		}
+		if ctx.Err() != nil {
+			return nil, ErrInstallStopped
 		}
 		msg := strings.TrimSpace(string(out))
 		if msg != "" {
@@ -257,12 +269,21 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		}
 		return nil, fmt.Errorf("install failed at %s and was rolled back: %w", step, err)
 	}
+	if ctx.Err() != nil {
+		return stopped()
+	}
 
 	if _, err := d.Runner.Run(ctx, "id", "-u", d.User); err != nil {
 		progress("user")
+		if ctx.Err() != nil {
+			return stopped()
+		}
 		if out, err := d.Runner.Run(ctx, "useradd", "--system", "--user-group", "--home-dir", installData, "--shell", "/usr/sbin/nologin", d.User); err != nil {
 			return failed("useradd (create the service user)", err, out)
 		}
+	}
+	if ctx.Err() != nil {
+		return stopped()
 	}
 	progress("binary")
 	if err := mkdirTracked(filepath.Dir(at(installBin)), 0o755, &undo); err != nil {
@@ -270,6 +291,9 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	}
 	if err := copyVerified(v, at(installBin), &undo); err != nil {
 		return failed("copying the binary", err, nil)
+	}
+	if ctx.Err() != nil {
+		return stopped()
 	}
 	progress("profile")
 	dataBefore := dirNames(at(installData))
@@ -285,6 +309,9 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	if out, err := d.Runner.Run(ctx, "chown", "-R", d.User+":"+d.User, at(installData)); err != nil {
 		return failed("chown (hand the data folder to "+d.User+")", err, out)
 	}
+	if ctx.Err() != nil {
+		return stopped()
+	}
 	progress("unit")
 	if err := mkdirTracked(filepath.Dir(at(installUnit)), 0o755, &undo); err != nil {
 		return failed("creating the unit folder", err, nil)
@@ -293,17 +320,26 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		return failed("writing the unit", err, nil)
 	}
 	undo.push(func() { _ = os.Remove(at(installUnit)) })
+	if ctx.Err() != nil {
+		return stopped()
+	}
 	progress("reload")
 	if out, err := d.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
 		return failed("systemctl daemon-reload", err, out)
 	}
 	if d.Start {
+		if ctx.Err() != nil {
+			return stopped()
+		}
 		progress("service")
 		if out, err := d.Runner.Run(ctx, "systemctl", "enable", "--now", unitServName); err != nil {
 			return failed("systemctl enable (start the service)", err, out)
 		}
 	}
 	if d.Firewall {
+		if ctx.Err() != nil {
+			return stopped()
+		}
 		progress("firewall")
 		probe := d.FirewallProbe
 		if probe == nil {
@@ -323,6 +359,9 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		health = defaultHealth
 	}
 	if health != nil && d.Start {
+		if ctx.Err() != nil {
+			return stopped()
+		}
 		progress("health")
 		if err := health(ctx, at(installData)); err != nil {
 			return failed("checking the node's health", err, nil)

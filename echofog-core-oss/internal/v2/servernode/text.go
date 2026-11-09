@@ -185,6 +185,9 @@ var messages = map[string]msg{
 	"setup.failed.rolled-back":          {"Уже сделанное отменено: службы, файлов и правил этой попытки не осталось. Исправить причину и запустить setup снова.", "What was done is taken back: no service, files or rules of this attempt remain. Fix the cause and run setup again."},
 	"setup.failed.exit":                 {"Enter — выйти.", "Enter exits."},
 	"setup.warn.no-status":              {"Нода не ответила на проверку состояния: %s. Проверить: systemctl status echofog-node и v2 status.", "The node did not answer the status check: %s. Check systemctl status echofog-node and v2 status."},
+	"setup.warn.phrase-file":            {"Установка завершена, но файл фразы восстановления не записан: %s. Фраза показана на экране — сохранить её сейчас: повторно она не показывается.", "The installation is complete, but the recovery phrase file was not written: %s. The phrase is on the final screen — save it now: it is not shown again."},
+	"setup.warn.token-file":             {"Установка завершена, но файл токена операторского API не записан: %s. Токен показан на экране — сохранить его сейчас.", "The installation is complete, but the operator API token file was not written: %s. The token is on the final screen — save it now."},
+	"setup.apply.stopping":              {"Остановка: текущий шаг завершается, затем установка откатит сделанное.", "Stopping: the current step finishes, then the installation takes back what it did."},
 	"setup.cancelled":                   {"Отменено: ничего не изменено.", "Cancelled: nothing was changed."},
 	"setup.plain.confirm":               {"Применить? (y/n)", "Apply? (y/n)"},
 	// ---- status panel
