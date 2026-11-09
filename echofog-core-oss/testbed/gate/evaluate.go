@@ -198,28 +198,65 @@ func visibilityRows(run *RunReport) []Row {
 	return []Row{band("visibility_pct", run.Aggregate.VisibilityPct), band("strict_visibility_pct", run.Aggregate.StrictVisibilityPct)}
 }
 
+// v2Required is the v2-side rows a report must carry: D4 and D10 are the two the gate used to
+// drop, D5-D8 the four it read before. A report without a row is not a pass.
+var v2Required = []string{"D4", "D5", "D6", "D7", "D8", "D10"}
+
+// v2Rows reads every row of the v2 side of the gate that the censor measured on the real v2
+// flows, not a fixed list of four: a red D4 or D10 cannot be lost between report.json and the
+// verdict. A detector with no row or no flow is not measured, never green.
 func v2Rows(run *RunReport) []Row {
-	var out []Row
-	for _, id := range []string{"D5", "D6", "D7", "D8"} {
-		metric, limit := "v2 share", "<= 10 % green, <= 20 % yellow"
-		if id == "D6" {
-			metric, limit = "v2 auc", "<= 0.65 green, <= 0.75 yellow"
-		}
-		r := Row{ID: id, Metric: metric, Limit: limit, Source: srcH1a, Status: NotMeasured, Value: "n/a",
+	const shareLimit, aucLimit = "<= 10 % green, <= 20 % yellow", "<= 0.65 green, <= 0.75 yellow"
+	blank := func(id string) Row {
+		r := Row{ID: id, Metric: "v2 share", Limit: shareLimit, Source: srcH1a, Status: NotMeasured, Value: "n/a",
 			Note: "no real v2 flow in the detector's scope in this run"}
+		if id == "D6" {
+			r.Metric, r.Limit = "v2 auc", aucLimit
+		}
+		return r
+	}
+	seen := map[string]bool{}
+	var ids []string
+	if run.V2Gate != nil {
+		for _, g := range run.V2Gate.Rows {
+			if g.Detector == "" || seen[g.Detector] {
+				continue
+			}
+			seen[g.Detector] = true
+			ids = append(ids, g.Detector)
+		}
+	}
+	absent := map[string]bool{}
+	for _, id := range v2Required {
+		if !seen[id] {
+			absent[id] = true
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	out := make([]Row, 0, len(ids))
+	for _, id := range ids {
+		r := blank(id)
+		if absent[id] {
+			r.Note = "the report has no " + id + " row: not measured, not a pass"
+		}
 		if run.V2Gate != nil {
 			for _, g := range run.V2Gate.Rows {
 				if g.Detector != id || !g.Measured {
 					continue
 				}
-				r.Note = ""
-				if id == "D6" && g.AUC != nil {
+				if id == "D6" {
+					if g.AUC == nil {
+						continue
+					}
+					r.Note = ""
 					r.Value = fmt.Sprintf("%.2f", *g.AUC)
 					r.Status = pick(*g.AUC, 0.65, 0.75)
-				} else if id != "D6" {
-					r.Value = fmt.Sprintf("%s (%d of %d)", pct(g.Share), g.Flagged, g.N)
-					r.Status = pick(g.Share, 0.10, 0.20)
+					continue
 				}
+				r.Note = ""
+				r.Value = fmt.Sprintf("%s (%d of %d)", pct(g.Share), g.Flagged, g.N)
+				r.Status = pick(g.Share, 0.10, 0.20)
 			}
 		}
 		out = append(out, r)
