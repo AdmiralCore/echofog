@@ -63,6 +63,7 @@ func v2Err(err error) error {
 type v2NetBackend struct {
 	v2PendingBackend
 	app v2App
+	api *NodeApi // the saved settings (proxy, anonymous mode) live on the facade
 	// check says whether the runtime can run in a mode; restart rebuilds it from the saved settings
 	// (T11.7). Both nil: the mode applies at the next start.
 	check   func(app.Mode) error
@@ -81,7 +82,7 @@ func (n *NodeApi) AttachV2(a v2App) {
 	if a == nil || n.node == nil || n.node.Cfg == nil || !n.node.Cfg.IsV2() {
 		return
 	}
-	n.backends.net = &v2NetBackend{app: a, check: n.v2CheckMode, restart: n.restartV2}
+	n.backends.net = &v2NetBackend{app: a, api: n, check: n.v2CheckMode, restart: n.restartV2}
 	n.backends.contact = &v2ContactBackend{app: a}
 	n.v2n.attach(a)
 }

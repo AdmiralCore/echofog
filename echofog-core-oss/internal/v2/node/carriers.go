@@ -76,6 +76,8 @@ func suiteRegistry(cfg Config, clock carrier.Clock) (*carrier.Registry, error) {
 	if err := reality2.Register(reg, reality2.NewDialer(reality2.DialerConfig{Now: clock.Now}), nil); err != nil {
 		return nil, fmt.Errorf("node: reality2 dialer: %w", err)
 	}
+	// The TCP suites: the only ones that go out behind a proxy (T11.6a), and the ones a network that
+	// blocks UDP leaves.
 	if err := reality2.RegisterTCP(reg, reality2.NewTCPDialer(reality2.TCPDialerConfig{Now: clock.Now}), nil); err != nil {
 		return nil, fmt.Errorf("node: reality2-tcp dialer: %w", err)
 	}

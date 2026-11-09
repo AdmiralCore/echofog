@@ -116,7 +116,12 @@ type signalHolder struct{ port callnet.SignalPort }
 
 // SetCallRoute sets network.call_route: the kind of path call media takes (T9.3). It applies to
 // the next datagram sent or received.
-func (r *Runtime) SetCallRoute(rt route.Route) { r.callRoute.Store(uint32(rt)) }
+func (r *Runtime) SetCallRoute(rt route.Route) {
+	if r.egress != nil {
+		rt = route.Relay // behind a proxy a direct media path would show the address (T11.6a)
+	}
+	r.callRoute.Store(uint32(rt))
+}
 
 // CallRoute returns the current call_route.
 func (r *Runtime) CallRoute() route.Route { return route.Route(r.callRoute.Load()) }
