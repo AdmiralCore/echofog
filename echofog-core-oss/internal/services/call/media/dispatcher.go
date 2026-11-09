@@ -113,6 +113,9 @@ type MediaDispatcher struct {
 	fecRx    *fecReceiver
 	rx       rxMeters // what the path of each watched stream does, for the broadcaster's rate
 	repeat   audioRepeat
+	// floor is the datagram floor the transport reports (0: the v1 DatagramBudget). Media seals
+	// fragments to fit it: a v2 path carries 1232 bytes, not the 1242 of the v1 QUIC budget.
+	floor int
 
 	// OnVideoNack fires shortly after a watched stream has a gap; the call layer sends the NACK
 	// to the stream's parent, which resends from its ring.
@@ -165,6 +168,9 @@ func NewMediaDispatcher(selfID types.PeerID, sender FrameSender, consumer LocalM
 	}
 	if sender != nil {
 		d.outbox = NewOutbox(sender)
+		if f, ok := sender.(transport.DatagramFloor); ok {
+			d.floor = f.DatagramFloor()
+		}
 	}
 	go d.housekeeping()
 	return d
@@ -1228,6 +1234,11 @@ func (d *MediaDispatcher) seal(kind FrameKind, streamID string, seq uint32, payl
 	}
 	if key.signers != nil && signKey != nil {
 		unit.Payload = SignUnitPayload(unit, payload, signKey)
+	}
+	if d.floor > 0 && d.floor < DatagramBudget {
+		// the transport carries less than the v1 budget: leave the difference free in every
+		// fragment, or a full one is refused with ErrDatagramTooLarge and the video is lost
+		reserve += DatagramBudget - d.floor
 	}
 	return sealUnit(unit, key.key, reserve)
 }

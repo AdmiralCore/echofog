@@ -58,6 +58,14 @@ type DirectLink interface {
 	DirectLink(peer types.PeerID) bool
 }
 
+// DatagramFloor is implemented by a transport whose datagrams carry fewer bytes than the call
+// layer's v1 budget (media.DatagramBudget, 1242). The v2 sessions work on the 1232-byte floor of
+// every path (wire.md 2.4, callnet.MaxDatagram); media seals fragments to fit it, or the transport
+// refuses them with ErrDatagramTooLarge and the media is lost.
+type DatagramFloor interface {
+	DatagramFloor() int
+}
+
 // ErrDatagramTooLarge reports that an unreliable frame did not fit into one datagram; the sender
 // may put it on the reliable path instead.
 var ErrDatagramTooLarge = errors.New("call frame does not fit into a datagram")
