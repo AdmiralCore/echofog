@@ -522,7 +522,7 @@ func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw
 	if err != nil {
 		return err
 	}
-	return printPlainFinal(out, plan, info, *plain)
+	return printPlainFinal(out, plan, info)
 }
 
 func splitList(s string) []string {
@@ -564,7 +564,7 @@ func confirmReader(in *bufio.Reader, out io.Writer, lang string) (bool, error) {
 
 // printPlainFinal shows the result without a full-screen interface. The recovery phrase and the
 // operator token never go to the plain output: they live in files under the data folder.
-func printPlainFinal(out io.Writer, plan *SetupPlan, info *FinalInfo, plain bool) error {
+func printPlainFinal(out io.Writer, plan *SetupPlan, info *FinalInfo) error {
 	fmt.Fprintln(out, "\n"+Message(plan.Lang, "setup.done.title"))
 	if info.PublicLink != "" {
 		fmt.Fprintln(out, Message(plan.Lang, "setup.done.link", info.PublicLink))
