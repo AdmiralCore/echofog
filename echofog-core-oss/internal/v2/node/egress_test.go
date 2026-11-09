@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	objpb "github.com/echofog/echofog-core/internal/v2/objects/pb"
+	"github.com/echofog/echofog-core/internal/v2/portmap"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	rp "github.com/echofog/echofog-core/internal/v2/routepolicy"
 )
@@ -357,5 +359,68 @@ func TestEgressFilterAndOpenerRefuseUDP(t *testing.T) {
 	}
 	if len(px.requests()) != 0 {
 		t.Fatal("a refused socket still reached the proxy")
+	}
+}
+
+// The profile may ask for port mapping, but behind a proxy nothing is forwarded (T11.6a M2): the
+// node builds its manager disabled and the gateway is never touched, whatever the profile says.
+func TestEgressForbidsPortMapping(t *testing.T) {
+	g := &pcpRouter{}
+	px := newFakeSocks(t)
+	n := newTestNodeFull(t, cards.Visible, true, nil, nil, nil, func(c *node.Config) {
+		c.Profile.PortMapping = true
+		c.PortMap = g.config()
+		c.Egress = egressTo(px, false)
+	})
+	if node.PortMappingOf(n.rt) {
+		t.Fatal("the profile still asks for port mapping behind a proxy")
+	}
+	if err := node.PortMapAdd(n.rt, portmap.TCP, 4430); !errors.Is(err, portmap.ErrDisabled) {
+		t.Fatalf("the port-mapping manager of a node behind a proxy is not disabled: %v", err)
+	}
+	n.start(t)
+	if err := n.rt.NetworkChanged(t.Context(), node.DialOpt{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.rt.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if g.dials.Load()+g.gateway.Load()+g.http.Load() != 0 {
+		t.Fatalf("a node behind a proxy touched the gateway: dials=%d gateway=%d http=%d",
+			g.dials.Load(), g.gateway.Load(), g.http.Load())
+	}
+}
+
+// Behind a proxy the observed address is the exit's, not ours (T11.6a M2): a change must not reach
+// the card or the operator, even when the listener follows the public address.
+func TestEgressPublicAddrChangeDoesNotReachTheCard(t *testing.T) {
+	ev := &captureEvents{}
+	px := newFakeSocks(t)
+	n := newTestNodeFull(t, cards.Visible, true, nil, ev, func(c *cards.Config) {
+		c.Listeners[0].FollowPublic = true
+	}, func(c *node.Config) { c.Egress = egressTo(px, false) })
+
+	obs := node.ObserverOf(n.rt)
+	obs.Observe(observation(1, "198.51.100.1", "8.8.8.8:4000"))
+	obs.Observe(observation(2, "192.0.2.9", "8.8.8.8:4000"))
+	if got, ok := n.rt.PublicAddr(); !ok || got != netip.MustParseAddr("8.8.8.8") {
+		t.Fatalf("the observer did not decide the address: %v %v", got, ok)
+	}
+	if ev.has(node.EventPublicAddr) {
+		t.Fatal("a node behind a proxy told the operator its address changed")
+	}
+	cur, err := n.builder.Current(t.Context(), objects.ScopePeer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := objects.VerifyCard(cur.Envelope, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range card.Body.GetAddrs() {
+		if a.GetSuite() == objects.SuiteNoise3 && a.GetHost() != "127.0.0.1" {
+			t.Fatalf("the card host followed the exit address: %q", a.GetHost())
+		}
 	}
 }

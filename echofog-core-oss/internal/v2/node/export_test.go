@@ -12,6 +12,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/handshake"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/portmap"
 	"github.com/echofog/echofog-core/internal/v2/punch"
 	"github.com/echofog/echofog-core/internal/v2/session"
 	"time"
@@ -168,4 +169,8 @@ var (
 	EgressDialer = func(e *Egress) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 		return e.dialer()
 	}
+	// PortMappingOf reports whether the effective profile still asks the router for ports.
+	PortMappingOf = func(r *Runtime) bool { return r.cfg.Profile.PortMapping }
+	// PortMapAdd exposes the manager the runtime built, to check it was built disabled.
+	PortMapAdd = func(r *Runtime, proto portmap.Proto, port uint16) error { return r.pm.Add(proto, port) }
 )
