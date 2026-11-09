@@ -53,6 +53,11 @@ func TestSetupInteractiveAppliesOnce(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.root, "etc/systemd/system/echofog-node.service")); err != nil {
 		t.Errorf("the unit is missing: %v", err)
 	}
+	// The screen removed the phrase file after the operator confirmed it; the text after the
+	// full-screen pass must not point at a file that is already gone.
+	if strings.Contains(out.String(), "Recovery phrase:") {
+		t.Errorf("the interactive pass prints a removed phrase file:\n%s", out.String())
+	}
 }
 
 // The screen offers the address of the machine, as the plain mode already does: an empty seed
