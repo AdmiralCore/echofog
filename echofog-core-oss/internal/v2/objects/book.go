@@ -7,11 +7,11 @@ import (
 
 // CardBook keeps verified cards by the rules of objects.md §3.2: per (device ID, scope, invite_id)
 // only the card with the highest seq (equivocation: the smaller object_id), never merging fields;
-// per account only the newest device list; and each handshake key bound to one device ID.
+// and per account only the newest device list. It does not bind handshake keys: hs↔device binding
+// comes only from a completed handshake (handshake.md §7, session.KeyBindings), never from a card.
 type CardBook struct {
 	mu          sync.Mutex
 	cards       map[cardSlot]*Card
-	hsOwner     map[string][32]byte      // hs akey → device ID
 	lists       map[[32]byte]*DeviceList // node ID → newest device list
 	misbehaving map[[32]byte]bool        // signer IDs seen equivocating
 }
@@ -32,7 +32,9 @@ const (
 )
 
 var (
-	// ErrHsKeyBound reports a card whose handshake key is already bound to another device (S15).
+	// ErrHsKeyBound is kept for the session layer, which rejects a card whose handshake key a
+	// completed handshake already bound to another device. CardBook.Add never returns it: a card
+	// is not proof of owning an hs key (handshake.md §7).
 	ErrHsKeyBound = errors.New("objects: handshake key bound to another device")
 	// ErrDeviceRemoved reports a card of a device missing from its account's newest device list.
 	ErrDeviceRemoved = errors.New("objects: device not in the account's current device list")
@@ -44,7 +46,6 @@ var (
 func NewCardBook() *CardBook {
 	return &CardBook{
 		cards:       make(map[cardSlot]*Card),
-		hsOwner:     make(map[string][32]byte),
 		lists:       make(map[[32]byte]*DeviceList),
 		misbehaving: make(map[[32]byte]bool),
 	}
@@ -74,16 +75,6 @@ func (b *CardBook) Add(c *Card) (AddResult, error) {
 		return CardIgnored, ErrDeviceRemoved
 	}
 
-	hs := []string{string(c.HsKey)}
-	if p := c.Body.GetPrevHs(); p != nil {
-		hs = append(hs, string(p.GetKey()))
-	}
-	for _, k := range hs {
-		if owner, ok := b.hsOwner[k]; ok && owner != c.DeviceID {
-			return CardIgnored, ErrHsKeyBound
-		}
-	}
-
 	slot := cardSlot{c.DeviceID, c.Scope, string(c.Body.GetInviteId())}
 	old := b.cards[slot]
 	res := CardAdded
@@ -100,9 +91,6 @@ func (b *CardBook) Add(c *Card) (AddResult, error) {
 	}
 	if res != CardIgnored {
 		b.cards[slot] = c
-		for _, k := range hs {
-			b.hsOwner[k] = c.DeviceID
-		}
 	}
 	if equivocated {
 		return res, ErrEquivocation
