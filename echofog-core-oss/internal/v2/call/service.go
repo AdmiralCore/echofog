@@ -292,7 +292,11 @@ func (s *Service) serve(ctx context.Context, p Peer, st Stream) {
 // duplicate are dropped with an error, never delivered. The per-device budget is taken first, so a
 // flood costs no parsing and no signature checks.
 func (s *Service) Process(ctx context.Context, p Peer, raw []byte) error {
-	if !s.admitSignal(p.Device) {
+	// A datagram of our own device that came back on a loop is not a foreign peer: it is counted
+	// apart and spends no budget of another device.
+	if p.Device == s.cfg.Origin.ID() {
+		s.selfSignals.Add(1)
+	} else if !s.admitSignal(p.Device) {
 		s.rateLimited.Add(1)
 		return ErrRateLimited
 	}
@@ -341,9 +345,10 @@ func (s *Service) Send(ctx context.Context, p Peer, m *pb.CallSignal) error {
 			m.MsgId = 1
 		}
 	}
-	if m.Timestamp == 0 {
-		m.Timestamp = s.cfg.Now().UnixMilli()
-	}
+	// This is a self-originated signal: it carries the corrected clock (AD13), never the device's
+	// raw one. A receiver's JoinGuard grades freshness by the corrected clock; a raw timestamp
+	// minutes off looked stale and its join was refused.
+	m.Timestamp = s.cfg.Now().UnixMilli()
 	var origin keys.AKey
 	var sign func([]byte) ([]byte, error)
 	if IsForwarded(m.Action) {
