@@ -206,6 +206,16 @@ func (m *setupModel) movePreset(d int) {
 	}
 }
 
+// failedCheck reports a line marked [x]: the setup must not continue while it is there.
+func (m *setupModel) failedCheck() bool {
+	for _, c := range m.checks {
+		if c.Level == LevelFail {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -265,6 +275,7 @@ func (m *setupModel) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.answers.Lang = m.lang
 			}
 		case tea.KeyEnter:
+			m.qerr = ""
 			m.scr = scrChecks
 			if m.deps.Checks != nil {
 				m.checks = m.deps.Checks(m.ctx)
@@ -275,9 +286,16 @@ func (m *setupModel) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case scrChecks:
 		if msg.Type == tea.KeyEnter {
+			// A check marked [x] really stops the setup; Enter only repeats the reason.
+			if m.failedCheck() {
+				m.qerr = Message(m.lang, "setup.checks.stop")
+				return m, nil
+			}
+			m.qerr = ""
 			m.scr = scrPreset
 		}
 		if msg.Type == tea.KeyEsc {
+			m.qerr = ""
 			m.scr = scrWelcome
 		}
 	case scrPreset:
@@ -842,6 +860,9 @@ func (m *setupModel) viewChecks() []string {
 		mark := markOf(c.Level, m.color)
 		lines = append(lines, fmt.Sprintf("%s %s", mark, c.Text(m.lang)))
 	}
+	if m.qerr != "" {
+		lines = append(lines, "", m.qerr)
+	}
 	lines = append(lines, "", dim.Render(Message(m.lang, "setup.keys")))
 	return lines
 }
@@ -1015,6 +1036,12 @@ func (m *setupModel) viewDone() []string {
 	}
 	for _, w := range m.final.Warnings {
 		lines = append(lines, Message(m.lang, "setup.done.warning", w))
+	}
+	if m.final.PhraseFileErr != nil {
+		lines = append(lines, Message(m.lang, "setup.done.warning", Message(m.lang, "setup.warn.phrase-file", m.final.PhraseFileErr.Error())))
+	}
+	if m.final.TokenFileErr != nil {
+		lines = append(lines, Message(m.lang, "setup.done.warning", Message(m.lang, "setup.warn.token-file", m.final.TokenFileErr.Error())))
 	}
 	lines = append(lines, "", dim.Render(Message(m.lang, "setup.done.next")))
 	return lines

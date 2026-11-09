@@ -219,7 +219,7 @@ func TestSetupChecksStopOnFailure(t *testing.T) {
 	if m.qerr == "" {
 		t.Fatal("the setup stopped without explaining why")
 	}
-	if !strings.Contains(m.View(), m.qerr) {
+	if !strings.Contains(strings.Join(m.viewChecks(), "\n"), m.qerr) {
 		t.Error("the screen does not show the explanation")
 	}
 	// The same screen advances when nothing is marked [x].

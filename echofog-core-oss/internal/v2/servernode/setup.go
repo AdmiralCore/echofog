@@ -84,6 +84,11 @@ type FinalInfo struct {
 	CoverCertDays int
 	Warnings      []string
 	Advice        []string
+	// PhraseFileErr and TokenFileErr say the secret file was not written after a successful
+	// Install. The full-screen mode shows the phrase and the token anyway; the plain mode has no
+	// screen, so a lost phrase is an error there, never a pointer at a file that does not exist.
+	PhraseFileErr error
+	TokenFileErr  error
 }
 
 // DefaultAnswers are the answers Enter gives in the setup.
@@ -647,15 +652,32 @@ func printFinal(out io.Writer, plan *SetupPlan, info *FinalInfo, phraseFile bool
 		dataDir = info.DataDir
 	}
 	if phraseFile {
-		fmt.Fprintln(out, Message(plan.Lang, "setup.done.phrase-file", filepath.ToSlash(recoveryPath(dataDir))))
+		if info.PhraseFileErr != nil {
+			fmt.Fprintln(out, Message(plan.Lang, "setup.plain.phrase-file-error"))
+		} else {
+			fmt.Fprintln(out, Message(plan.Lang, "setup.done.phrase-file", filepath.ToSlash(recoveryPath(dataDir))))
+		}
+		if info.TokenFileErr != nil {
+			fmt.Fprintln(out, Message(plan.Lang, "setup.plain.token-file-error"))
+		} else {
+			fmt.Fprintln(out, Message(plan.Lang, "setup.done.token-file", filepath.ToSlash(filepath.Join(dataDir, tokenFileName))))
+		}
+	} else if info.TokenFileErr == nil {
+		// The full-screen mode removed the phrase file after the confirmation; a token file that
+		// was not written must not be pointed at either.
+		fmt.Fprintln(out, Message(plan.Lang, "setup.done.token-file", filepath.ToSlash(filepath.Join(dataDir, tokenFileName))))
 	}
-	fmt.Fprintln(out, Message(plan.Lang, "setup.done.token-file", filepath.ToSlash(filepath.Join(dataDir, tokenFileName))))
 	fmt.Fprintln(out, Message(plan.Lang, "setup.done.status", dataDir))
 	for _, w := range info.Warnings {
 		fmt.Fprintln(out, "  "+w)
 	}
 	for _, a := range info.Advice {
 		fmt.Fprintln(out, "  "+a)
+	}
+	if phraseFile && info.PhraseFileErr != nil {
+		// The installation succeeded, but the phrase exists nowhere the operator can reach it.
+		// The plain mode has no screen: that is a failure of the run, not a warning.
+		return fmt.Errorf("%w: the recovery phrase was lost: its file was not written and the plain mode does not show it", errReported)
 	}
 	return nil
 }
@@ -676,6 +698,11 @@ func removeFile(path string) error {
 // applySetup installs the plan and collects what the final screen shows. Install's own rollback is
 // the safety net: a failed step leaves nothing behind.
 func applySetup(ctx context.Context, d InstallDeps, plan SetupPlan, progress func(string)) (*FinalInfo, error) {
+	// --data moves the whole installation. The unit needs an absolute systemd path; a relative
+	// one (the Windows default of the CLI) keeps the fixed layout.
+	if safePath.MatchString(plan.DataDir) && !strings.Contains(plan.DataDir, "..") {
+		d.DataDir = plan.DataDir
+	}
 	d.Config = plan.Config
 	d.Lang = plan.Lang
 	d.Start = plan.Start
@@ -690,15 +717,14 @@ func applySetup(ctx context.Context, d InstallDeps, plan SetupPlan, progress fun
 	info := &FinalInfo{Version: res.Version, DataDir: dataDir, Phrase: res.Phrase, Advice: res.Advice}
 	// The phrase goes to a private file: the full-screen mode shows it once and deletes the file
 	// after the operator confirms, the plain mode leaves it for the operator to copy. The install
-	// already succeeded, so a failed write is a warning about the file, never a rollback: the
-	// phrase is still on the final screen of the full-screen mode.
+	// already succeeded, so a failed write never rolls it back; the mode decides how to report it.
 	if err := writePrivate(filepath.Join(dataDir, "recovery-phrase.txt"), []byte(res.Phrase+"\n")); err != nil {
-		info.Warnings = append(info.Warnings, Message(plan.Lang, "setup.warn.phrase-file", err.Error()))
+		info.PhraseFileErr = err
 	}
 	if tok, err := NewTokenFile(filepath.Join(dataDir, tokenFileName)); err == nil {
 		info.Token = tok
 	} else {
-		info.Warnings = append(info.Warnings, Message(plan.Lang, "setup.warn.token-file", err.Error()))
+		info.TokenFileErr = err
 	}
 	if !plan.Start || d.Root != "" {
 		// A test or image root has no live node to ask; the health step is the seam's business.

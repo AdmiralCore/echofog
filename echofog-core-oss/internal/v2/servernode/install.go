@@ -54,7 +54,10 @@ type Runner interface {
 type InstallDeps struct {
 	// Root is prepended to every path ("" is the real root); tests and image builders use a folder.
 	Root string
-	User string
+	// DataDir is the profile folder as an absolute path ("/var/lib/echofog" when empty). It goes
+	// to the unit, the service user's home and the result; --data of the setup passes it here.
+	DataDir string
+	User    string
 	// Binary is the downloaded node binary; ManifestRaw the signed release manifest.
 	Binary      string
 	ManifestRaw []byte
@@ -223,6 +226,13 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	if d.Runner == nil {
 		return nil, errors.New("servernode: no command runner")
 	}
+	dataDir := d.DataDir
+	if dataDir == "" {
+		dataDir = installData
+	}
+	if !safePath.MatchString(dataDir) || strings.Contains(dataDir, "..") {
+		return nil, errors.New("servernode: unsafe data folder in the installer")
+	}
 	if err := d.Config.Validate(); err != nil {
 		return nil, err
 	}
@@ -237,10 +247,10 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 	}
 	defer v.cleanup()
 	at := func(p string) string { return filepath.Join(d.Root, filepath.FromSlash(p)) }
-	if _, err := os.Stat(filepath.Join(at(installData), identityFileName)); err == nil {
+	if _, err := os.Stat(filepath.Join(at(dataDir), identityFileName)); err == nil {
 		return nil, ErrAlreadyInstalled
 	}
-	unit, err := UnitFile(d.User, installData, installBin)
+	unit, err := UnitFile(d.User, dataDir, installBin)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +288,7 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		if ctx.Err() != nil {
 			return stopped()
 		}
-		if out, err := d.Runner.Run(ctx, "useradd", "--system", "--user-group", "--home-dir", installData, "--shell", "/usr/sbin/nologin", d.User); err != nil {
+		if out, err := d.Runner.Run(ctx, "useradd", "--system", "--user-group", "--home-dir", dataDir, "--shell", "/usr/sbin/nologin", d.User); err != nil {
 			return failed("useradd (create the service user)", err, out)
 		}
 	}
@@ -296,17 +306,17 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		return stopped()
 	}
 	progress("profile")
-	dataBefore := dirNames(at(installData))
-	if top := topMissing(at(installData)); top != "" {
+	dataBefore := dirNames(at(dataDir))
+	if top := topMissing(at(dataDir)); top != "" {
 		undo.push(func() { _ = os.RemoveAll(top) })
 	} else {
-		undo.push(func() { removeNew(at(installData), dataBefore) })
+		undo.push(func() { removeNew(at(dataDir), dataBefore) })
 	}
-	phrase, err := InitLang(at(installData), d.Config, d.Lang)
+	phrase, err := InitLang(at(dataDir), d.Config, d.Lang)
 	if err != nil {
 		return failed("creating the profile", err, nil)
 	}
-	if out, err := d.Runner.Run(ctx, "chown", "-R", d.User+":"+d.User, at(installData)); err != nil {
+	if out, err := d.Runner.Run(ctx, "chown", "-R", d.User+":"+d.User, at(dataDir)); err != nil {
 		return failed("chown (hand the data folder to "+d.User+")", err, out)
 	}
 	if ctx.Err() != nil {
@@ -335,6 +345,9 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 		if out, err := d.Runner.Run(ctx, "systemctl", "enable", "--now", unitServName); err != nil {
 			return failed("systemctl enable (start the service)", err, out)
 		}
+		if ctx.Err() != nil {
+			return stopped()
+		}
 	}
 	if d.Firewall {
 		if ctx.Err() != nil {
@@ -353,6 +366,9 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 			}
 			undo.push(func() { undoFw(context.Background(), d.Runner) })
 		}
+		if ctx.Err() != nil {
+			return stopped()
+		}
 	}
 	health := d.Health
 	if health == nil && d.Start && d.Root == "" {
@@ -363,15 +379,15 @@ func Install(ctx context.Context, d InstallDeps) (*InstallResult, error) {
 			return stopped()
 		}
 		progress("health")
-		if err := health(ctx, at(installData)); err != nil {
+		if err := health(ctx, at(dataDir)); err != nil {
 			return failed("checking the node's health", err, nil)
 		}
 	}
-	advice := FirewallAdvice(d.Lang, d.Config)
+	advice := firewallAdvice(d.Lang, d.Config, dataDir)
 	advice = append(advice,
 		tr(d.Lang, "Запуск: systemctl enable --now echofog-node (если не запущено ключом --start)", "Start: systemctl enable --now echofog-node (if --start was not given)"),
-		tr(d.Lang, "Состояние: "+installBin+" v2 status --data "+installData, "Status: "+installBin+" v2 status --data "+installData))
-	return &InstallResult{Phrase: phrase, Version: v.version, DataDir: installData, Advice: advice}, nil
+		tr(d.Lang, "Состояние: "+installBin+" v2 status --data "+dataDir, "Status: "+installBin+" v2 status --data "+dataDir))
+	return &InstallResult{Phrase: phrase, Version: v.version, DataDir: dataDir, Advice: advice}, nil
 }
 
 func dirNames(dir string) map[string]bool {
@@ -476,6 +492,11 @@ WantedBy=multi-user.target
 // FirewallAdvice lists the commands that open the node's ports and the way to check them. The
 // installer prints them and does not run them; the operator API is loopback only and never listed.
 func FirewallAdvice(lang string, cfg Config) []string {
+	return firewallAdvice(lang, cfg, installData)
+}
+
+// firewallAdvice is FirewallAdvice for an installation whose data folder --data moved.
+func firewallAdvice(lang string, cfg Config, dataDir string) []string {
 	out := []string{tr(lang,
 		"Открыть порты ноды в файрволе сервера (и в панели хостера): UDP для noise3 и reality2-quic, TCP для reality2-tcp, ws2 и ACME:",
 		"Open the node's ports in the server firewall (and in the host's panel): UDP for noise3 and reality2-quic, TCP for reality2-tcp, ws2 and ACME:")}
@@ -488,8 +509,8 @@ func FirewallAdvice(lang string, cfg Config) []string {
 		}
 	}
 	out = append(out, "  firewall-cmd --reload",
-		tr(lang, "Проверка: "+installBin+" v2 doctor --data "+installData+" (достижимость определяется по подключению пира, внешние сервисы не используются).",
-			"Check: "+installBin+" v2 doctor --data "+installData+" (reachability is judged by a peer connecting; no outside service is used)."))
+		tr(lang, "Проверка: "+installBin+" v2 doctor --data "+dataDir+" (достижимость определяется по подключению пира, внешние сервисы не используются).",
+			"Check: "+installBin+" v2 doctor --data "+dataDir+" (reachability is judged by a peer connecting; no outside service is used)."))
 	return out
 }
 
