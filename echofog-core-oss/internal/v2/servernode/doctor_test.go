@@ -51,8 +51,12 @@ type docRig struct {
 func newDocRig(t *testing.T) *docRig {
 	t.Helper()
 	dir, cfg := profile(t, false)
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "index.html"), []byte("cover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg.Cover = "example.org:443"
-	cfg.SiteDir = dir
+	cfg.SiteDir = site
 	cfg.CoverCert = writeCert(t, t.TempDir(), docNow.Add(-24*time.Hour), docNow.Add(90*24*time.Hour))
 	cfg.Listen[0].Advertise = "203.0.113.10"
 	return &docRig{dir: dir, deps: servernode.DoctorDeps{
@@ -155,6 +159,17 @@ func TestDoctorCatchesBrokenThings(t *testing.T) {
 			}
 			_ = os.Chmod(filepath.Join(r.dir, "server-identity.json"), 0o644)
 		}, "files", servernode.LevelWarn},
+		"cover certificate is world readable": {func(r *docRig, t *testing.T) {
+			if os.PathSeparator != '/' {
+				t.Skip("file modes")
+			}
+			if err := os.Chmod(r.deps.Config.CoverCert, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, "files", servernode.LevelWarn},
+		"cover site folder is empty": {func(r *docRig, _ *testing.T) {
+			r.deps.Config.SiteDir = t.TempDir()
+		}, "cover", servernode.LevelWarn},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
