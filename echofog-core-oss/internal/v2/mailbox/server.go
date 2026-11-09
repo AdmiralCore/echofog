@@ -57,6 +57,10 @@ type Limits struct {
 	QuotaItemsPerDay int
 	QuotaBytesPerDay int64
 	QuotaFactor      int
+	// DedupeItems bounds the memories of direct DEPOSITs into public queues (p/) across the whole
+	// relay. They outlive the acknowledged item by design, so they are not part of TotalItems and
+	// need their own cap; the oldest are evicted first when it is reached.
+	DedupeItems int
 	// Lifetimes.
 	QueueTTL  time.Duration // at most 30 days (services.md §5.2)
 	ItemTTL   time.Duration // unacknowledged items live 7 days (services.md §5.3)
@@ -75,6 +79,7 @@ func DefaultLimits() Limits {
 		PublicBytes:      2 << 20,
 		TotalItems:       100000,
 		TotalBytes:       100 << 20,
+		DedupeItems:      100000,
 		ItemMax:          MaxBlob,
 		QueuesPerNode:    64,
 		QuotaItemsPerDay: 5000,
@@ -96,6 +101,7 @@ func (l Limits) withDefaults() Limits {
 	}{
 		{&l.PrivateItems, d.PrivateItems}, {&l.PublicItems, d.PublicItems},
 		{&l.TotalItems, d.TotalItems}, {&l.ItemMax, d.ItemMax},
+		{&l.DedupeItems, d.DedupeItems},
 		{&l.QueuesPerNode, d.QueuesPerNode},
 		{&l.QuotaItemsPerDay, d.QuotaItemsPerDay}, {&l.QuotaFactor, d.QuotaFactor},
 		{&l.FetchItems, d.FetchItems},
@@ -477,6 +483,144 @@ func dedupeKey(hash []byte) []byte {
 	return append(out, hash...)
 }
 
+// directDedupeHash commits to the queue and to SHA-256(blob), so one proof of work buys one slot
+// (services.md 5.2). It is separate from the FORWARD memory, which commits to the sealed bytes.
+func directDedupeHash(queue, blob []byte) []byte {
+	sum := sha256.Sum256(blob)
+	h := sha256.New()
+	_, _ = h.Write([]byte("echofog/mailbox2/deposit-dedupe"))
+	_, _ = h.Write(queue)
+	_, _ = h.Write(sum[:])
+	return h.Sum(nil)
+}
+
+// directDedupeKey is the memory of a direct DEPOSIT into a public queue.
+func directDedupeKey(hash []byte) []byte {
+	return append([]byte("p/"), hash...)
+}
+
+// dedupeIndexPrefix sorts the direct-deposit memories by expiry, so the oldest are reclaimed from
+// the front without scanning the whole keyspace (AD19: the store TTL is only a backstop).
+const dedupeIndexPrefix = "P/"
+
+func dedupeIndexKey(expires int64, hash []byte) []byte {
+	b := make([]byte, 0, len(dedupeIndexPrefix)+8+len(hash))
+	b = append(b, dedupeIndexPrefix...)
+	b = binary.BigEndian.AppendUint64(b, uint64(expires))
+	return append(b, hash...)
+}
+
+func parseDedupeIndexKey(b []byte) (int64, []byte, error) {
+	const fixed = len(dedupeIndexPrefix) + 8
+	if len(b) != fixed+sha256.Size || !bytes.HasPrefix(b, []byte(dedupeIndexPrefix)) {
+		return 0, nil, ErrCorrupt
+	}
+	return int64(binary.BigEndian.Uint64(b[len(dedupeIndexPrefix):fixed])), b[fixed:], nil
+}
+
+// dedupeCountKey holds how many p/ memories exist. It is updated under s.mu together with the index,
+// so the relay never has to count the keys for every deposit.
+var dedupeCountKey = []byte("pd/count")
+
+// dedupeCountLocked returns the number of p/ memories. The caller holds s.mu.
+func (s *Server) dedupeCountLocked() (int64, error) {
+	raw, err := s.cfg.Store.Get(dedupeCountKey)
+	if errors.Is(err, store.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(raw) != 8 {
+		return 0, ErrCorrupt
+	}
+	return int64(binary.BigEndian.Uint64(raw)), nil
+}
+
+// addDedupeCountLocked moves the counter by delta; it never goes below zero. The caller holds s.mu.
+func (s *Server) addDedupeCountLocked(delta int64) error {
+	n, err := s.dedupeCountLocked()
+	if err != nil {
+		return err
+	}
+	n = max(n+delta, 0)
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(n))
+	return s.cfg.Store.Put(dedupeCountKey, b)
+}
+
+// makeRoomForDedupeLocked enforces Limits.DedupeItems: expired memories go first, then the ones
+// closest to their expiry. The counter is reconciled with the index when it outlived its keys (the
+// store TTL is a backstop). The caller holds s.mu.
+func (s *Server) makeRoomForDedupeLocked(now time.Time) error {
+	limit := int64(s.lim.DedupeItems)
+	if limit <= 0 {
+		return nil
+	}
+	n, err := s.dedupeCountLocked()
+	if err != nil {
+		return err
+	}
+	if n < limit {
+		return nil
+	}
+
+	var (
+		cursor  []byte
+		removed int64
+	)
+	flush := func() error {
+		if removed == 0 {
+			return nil
+		}
+		err := s.addDedupeCountLocked(-removed)
+		removed = 0
+		return err
+	}
+	nowNanos := now.UnixNano()
+	for {
+		entries, err := s.cfg.Store.ScanFrom([]byte(dedupeIndexPrefix), cursor, pruneBatch)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			// The counter is larger than the index: trust the index and start from zero.
+			return s.addDedupeCountLocked(-n)
+		}
+		for _, e := range entries {
+			expires, hash, err := parseDedupeIndexKey(e.Key)
+			if err != nil {
+				return err
+			}
+			if expires > nowNanos && n < limit {
+				return flush()
+			}
+			if err := s.cfg.Store.Delete(e.Key); err != nil {
+				return err
+			}
+			if err := s.cfg.Store.Delete(directDedupeKey(hash)); err != nil {
+				return err
+			}
+			n--
+			removed++
+			cursor = append(cursor[:0], e.Key...)
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		if n < limit {
+			return nil
+		}
+	}
+}
+
+// dedupeExpiry is the logical lifetime of a direct-deposit memory: its item's expiry.
+func dedupeExpiry(expires int64) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(expires))
+	return b
+}
+
 func ownerPrefix(opaque []byte) []byte {
 	out := make([]byte, 0, 2+len(opaque)+1)
 	out = append(out, "o/"...)
@@ -620,8 +764,11 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 }
 
 // Deposit stores one blob in a queue. It returns the DEPOSITED status and, when stored, the item
-// id. A proof of work below the queue's threshold is ErrPowInvalid (ERROR 0x100); a missing one is
-// StatusPowRequired.
+// id. A sender that is not the queue owner is external: "no queue", "full", a missing proof and a
+// bad proof all answer one StatusRefused, so the relay is not an oracle for whether a public queue
+// exists or how full it is (AD20, services.md 5.1). The owner is on the authenticated path and keeps
+// the real codes; its bad proof is ErrPowInvalid (ERROR{0x100} in handler.go). A direct deposit into
+// a public queue is deduplicated by the envelope, so one proof of work buys one slot (services.md 5.2).
 func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	if len(m.Queue) != QueueSize {
 		return StatusUnknownQueue, nil, nil
@@ -640,25 +787,68 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	if err != nil {
 		s.mu.Unlock()
 		if errors.Is(err, ErrUnknownQueue) {
-			return StatusUnknownQueue, nil, nil
+			// Without a record there is no owner to authenticate, so every sender is external here.
+			return StatusRefused, nil, nil
 		}
 		return 0, nil, err
 	}
+	// The owner is the node that created the queue. Everyone else (a first contact on a public
+	// queue, or a sender hidden behind a forwarding relay) must not be able to tell the queue state.
+	external := !bytes.Equal(p.Node[:], rec.Owner[:])
 	if s.cfg.Metered {
 		s.mu.Unlock()
 		return StatusRefused, nil, nil
 	}
 	if rec.Public && !ValidPow(m.Queue, m.Blob, m.Pow, rec.PowBits) {
 		s.mu.Unlock()
+		if external {
+			return StatusRefused, nil, nil
+		}
 		if m.Pow == 0 {
 			return StatusPowRequired, nil, nil
 		}
-		return StatusRefused, nil, ErrPowInvalid
+		return 0, nil, ErrPowInvalid
+	}
+
+	// One blob, one slot: a repeat with valid work is answered stored without a second item for the
+	// item's lifetime (services.md 5.2). The value is the logical expiry, so the store TTL is only a
+	// backstop (AD19) and a test clock can move past it.
+	var dedupeHash, dedupeKey []byte
+	if rec.Public {
+		dedupeHash = directDedupeHash(m.Queue, m.Blob)
+		dedupeKey = directDedupeKey(dedupeHash)
+		raw, err := s.cfg.Store.Get(dedupeKey)
+		switch {
+		case err == nil:
+			if len(raw) == 8 {
+				oldExpiry := int64(binary.BigEndian.Uint64(raw))
+				if now.UnixNano() < oldExpiry {
+					s.mu.Unlock()
+					return StatusStored, nil, nil
+				}
+				// The memory outlived its item only as garbage: drop its index entry and its
+				// share of the counter before the key is written again.
+				if err := s.cfg.Store.Delete(dedupeIndexKey(oldExpiry, dedupeHash)); err != nil {
+					s.mu.Unlock()
+					return 0, nil, err
+				}
+				if err := s.addDedupeCountLocked(-1); err != nil {
+					s.mu.Unlock()
+					return 0, nil, err
+				}
+			}
+		case !errors.Is(err, store.ErrNotFound):
+			s.mu.Unlock()
+			return 0, nil, err
+		}
 	}
 
 	items, bytes := s.queueLimits(rec)
 	if int(rec.Count)+1 > items || rec.Bytes+int64(len(m.Blob)) > bytes {
 		s.mu.Unlock()
+		if external {
+			return StatusRefused, nil, nil
+		}
 		return StatusFull, nil, nil
 	}
 	total, err := s.totalLocked(rec.Public)
@@ -668,6 +858,9 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	}
 	if int(total.Items)+1 > s.lim.TotalItems || total.Bytes+uint64(len(m.Blob)) > uint64(s.lim.TotalBytes) {
 		s.mu.Unlock()
+		if external {
+			return StatusRefused, nil, nil
+		}
 		return StatusFull, nil, nil
 	}
 	if !s.quotaAllowsLocked(now, p, 1, uint64(len(m.Blob))) {
@@ -710,7 +903,58 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 		s.mu.Unlock()
 		return 0, nil, err
 	}
+	if dedupeKey != nil {
+		if err := s.makeRoomForDedupeLocked(now); err != nil {
+			_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
+			rec.Count--
+			rec.Bytes -= int64(len(m.Blob))
+			_ = s.putQueueLocked(m.Queue, rec, now)
+			_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+			_ = s.cfg.Store.Delete(indexKey)
+			s.mu.Unlock()
+			return 0, nil, err
+		}
+		if err := s.cfg.Store.PutTTL(dedupeKey, dedupeExpiry(expires), itemStoreTTL); err != nil {
+			_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
+			rec.Count--
+			rec.Bytes -= int64(len(m.Blob))
+			_ = s.putQueueLocked(m.Queue, rec, now)
+			_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+			_ = s.cfg.Store.Delete(indexKey)
+			s.mu.Unlock()
+			return 0, nil, err
+		}
+		dedupeIdx := dedupeIndexKey(expires, dedupeHash)
+		if err := s.cfg.Store.PutTTL(dedupeIdx, nil, itemStoreTTL); err != nil {
+			_ = s.cfg.Store.Delete(dedupeKey)
+			_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
+			rec.Count--
+			rec.Bytes -= int64(len(m.Blob))
+			_ = s.putQueueLocked(m.Queue, rec, now)
+			_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+			_ = s.cfg.Store.Delete(indexKey)
+			s.mu.Unlock()
+			return 0, nil, err
+		}
+		if err := s.addDedupeCountLocked(1); err != nil {
+			_ = s.cfg.Store.Delete(dedupeIdx)
+			_ = s.cfg.Store.Delete(dedupeKey)
+			_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
+			rec.Count--
+			rec.Bytes -= int64(len(m.Blob))
+			_ = s.putQueueLocked(m.Queue, rec, now)
+			_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+			_ = s.cfg.Store.Delete(indexKey)
+			s.mu.Unlock()
+			return 0, nil, err
+		}
+	}
 	if err := s.quotaAddLocked(now, p, 1, uint64(len(m.Blob))); err != nil {
+		if dedupeKey != nil {
+			_ = s.cfg.Store.Delete(dedupeIndexKey(expires, dedupeHash))
+			_ = s.cfg.Store.Delete(dedupeKey)
+			_ = s.addDedupeCountLocked(-1)
+		}
 		_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
 		rec.Count--
 		rec.Bytes -= int64(len(m.Blob))
@@ -942,10 +1186,12 @@ const (
 
 // forwardOn is the role F: pass a FORWARD on to the mailbox relay it names. F cannot read the sealed
 // deposit. The sender's quota per day (node ID and unit) is checked first and spent whatever M
-// answers; a new connection costs one of ten dials a minute for the sender's session.
+// answers; a new connection costs one of ten dials a minute for the sender's session. The caller is
+// the external sender, so F keeps only stored and too-large and maps every other status, including
+// its own relay-unreachable, to refused (services.md 5.3, AD20).
 func (s *Server) forwardOn(ctx context.Context, p Peer, m Forward) (uint32, error) {
 	if s.cfg.Forwarder == nil || len(m.Relay) != 32 {
-		return StatusRelayUnreachable, nil
+		return StatusRefused, nil
 	}
 	if s.cfg.Metered {
 		return StatusRefused, nil
@@ -999,14 +1245,25 @@ func (s *Server) forwardOn(ctx context.Context, p Peer, m Forward) (uint32, erro
 	select {
 	case r := <-done:
 		if r.err != nil {
-			return StatusRelayUnreachable, nil
+			return StatusRefused, nil
 		}
-		return r.st, nil
+		return externalStatus(r.st), nil
 	case <-s.aft(ForwardTimeout):
 		cancel()
-		return StatusRelayUnreachable, nil
+		return StatusRefused, nil
 	case <-ctx.Done():
-		return StatusRelayUnreachable, nil
+		return StatusRefused, nil
+	}
+}
+
+// externalStatus is what an external sender may see of a mailbox answer (services.md 5.1, 5.3): only
+// stored and too-large keep their meaning; 1, 2, 4, 5 and 6 all collapse into refused.
+func externalStatus(st uint32) uint32 {
+	switch st {
+	case StatusStored, StatusTooLarge:
+		return st
+	default:
+		return StatusRefused
 	}
 }
 

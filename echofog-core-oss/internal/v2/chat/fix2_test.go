@@ -191,7 +191,7 @@ func TestInitWithAnUnlistedDeviceDoesNotBlockTheAccount(t *testing.T) {
 	}
 }
 
-func TestLookupErrorIsRememberedPerDevice(t *testing.T) {
+func TestLookupErrorIsRememberedPerAccount(t *testing.T) {
 	w := newWorld(t)
 	b := w.newPeer()
 	ghost := fakeAccount()
@@ -200,11 +200,18 @@ func TestLookupErrorIsRememberedPerDevice(t *testing.T) {
 		b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev1, []byte("init bytes"), true))
 	}
 	if n := w.resolves[ghost.ID()]; n != 1 {
-		t.Fatalf("%d lookups for four inits of one (account, device)", n)
+		t.Fatalf("%d lookups for four inits of one account", n)
 	}
+	// another device of the same account does not make a second search: one search per contact per
+	// TTL bounds what the recipient asks the DHT (ЧМ-2)
+	b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev2, []byte("init bytes"), true))
+	if n := w.resolves[ghost.ID()]; n != 1 {
+		t.Fatalf("%d lookups for a second device within the TTL, want 1", n)
+	}
+	w.clock.Add(2 * time.Minute)
 	b.svc.Receive(context.Background(), craft(t, b, b, ghost, dev2, []byte("init bytes"), true))
 	if n := w.resolves[ghost.ID()]; n != 2 {
-		t.Fatalf("%d lookups, another device of the account is its own case", n)
+		t.Fatalf("%d lookups after the TTL, want 2", n)
 	}
 }
 
