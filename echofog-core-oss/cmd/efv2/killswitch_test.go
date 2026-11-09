@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -47,8 +48,15 @@ func TestKillswitchRemoveWithoutRightsSaysHow(t *testing.T) {
 	withFakes(t, true, platform.Report{}, tun.ErrNoPrivilege)
 	var out bytes.Buffer
 	err := cmdKillswitch([]string{"remove"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "administrator") {
-		t.Fatalf("error %v: it must say the terminal has to be elevated", err)
+	want := "administrator"
+	if runtime.GOOS == "linux" {
+		want = "root"
+	}
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %v: it must say which rights the removal needs", err)
+	}
+	if runtime.GOOS == "linux" && !strings.Contains(err.Error(), "sudo") {
+		t.Fatalf("error %v: it must name the way to get root", err)
 	}
 }
 

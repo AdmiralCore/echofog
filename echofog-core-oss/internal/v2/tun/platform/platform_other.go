@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && (!linux || android)
 
 package platform
 
@@ -13,7 +13,8 @@ import (
 // HelperFlag as os.Args[1] makes the executable run RunHelper.
 const HelperFlag = ks.HelperFlag
 
-// Supported reports whether the kill switch has a driver here: not yet (T10.6c brings Linux).
+// Supported reports whether the kill switch has a driver here: not on this platform (Windows and
+// Linux have their own files).
 func Supported() bool { return false }
 
 // Drivers has no driver: every operation answers tun.ErrUnsupported.
