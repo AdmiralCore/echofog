@@ -571,7 +571,11 @@ func (e *Engine) birthdayResponder(mode Mode, targets []netip.AddrPort, peerNAT 
 			_ = bd.Net().AcceptOn(ctx, h.Sock)
 			return
 		}
-		if c, err := bd.Net().DialFrom(ctx, h.Sock, h.Target, MaxInitDatagrams); err == nil && c != nil && e.cfg.Bind != nil {
+		// The Init after the hit gets its own 3 s from the hit (services.md §6.4.1), not the rest of
+		// this responder's PunchWindow+AttemptTime.
+		ictx, stopInit := e.initAfterHit(ctx)
+		defer stopInit()
+		if c, err := bd.Net().DialFrom(ictx, h.Sock, h.Target, MaxInitDatagrams); err == nil && c != nil && e.cfg.Bind != nil {
 			if e.cfg.Bind(ctx, c) != nil {
 				_ = c.Close()
 			}
