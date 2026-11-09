@@ -121,9 +121,11 @@ func TestSetupPlainModeHonorsFlagsAndStartAnswer(t *testing.T) {
 	}
 }
 
-// A failed write of the recovery-phrase file happens after Install succeeded. It is reported as
-// its own warning: the node stays installed, and the operator is never told it was rolled back.
-func TestSetupPhraseWriteFailureIsNotRolledBack(t *testing.T) {
+// A failed write of the recovery-phrase file happens after Install succeeded. In the plain mode
+// the phrase is shown on no screen, so losing its file loses the phrase: that is an error with a
+// non-zero code. The node itself stays installed (no rollback), but the output must not point at
+// the file that does not exist and must not mention a screen the plain mode does not have.
+func TestSetupPhraseWriteFailureIsAnErrorInPlain(t *testing.T) {
 	r := newInstRig(t)
 	setupSeams(t, r)
 	// A directory in place of the phrase file makes the private write fail after Install.
@@ -132,10 +134,10 @@ func TestSetupPhraseWriteFailureIsNotRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	code := servernode.MainIO(setupArgs(r, manifestFile(t, r), "--preset", "relay", "--advertise", "203.0.113.10", "--yes"),
+	code := servernode.MainIO(setupArgs(r, manifestFile(t, r), "--preset", "relay", "--advertise", "203.0.113.10", "--yes", "--lang", "en"),
 		nil, strings.NewReader(""), &out, &errb)
-	if code != 0 {
-		t.Fatalf("setup after a phrase-file failure: %d\n%s\n%s", code, out.String(), errb.String())
+	if code == 0 {
+		t.Fatalf("setup reported success although the recovery phrase was lost: %d\n%s\n%s", code, out.String(), errb.String())
 	}
 	if _, err := os.Stat(filepath.Join(data, "server-identity.json")); err != nil {
 		t.Errorf("the successful installation was rolled back: %v", err)
@@ -144,10 +146,51 @@ func TestSetupPhraseWriteFailureIsNotRolledBack(t *testing.T) {
 		t.Errorf("the unit is missing: %v", err)
 	}
 	combined := out.String() + errb.String()
-	if !strings.Contains(combined, "recovery phrase") {
+	if !strings.Contains(strings.ToLower(combined), "phrase") {
 		t.Errorf("the failed phrase write was not reported:\n%s", combined)
+	}
+	if strings.Contains(combined, "Recovery phrase:") || strings.Contains(combined, "recovery-phrase.txt") {
+		t.Errorf("the output points at the phrase file that was not written:\n%s", combined)
+	}
+	if strings.Contains(strings.ToLower(combined), "screen") || strings.Contains(combined, "экране") {
+		t.Errorf("the plain output points at a screen it does not have:\n%s", combined)
 	}
 	if strings.Contains(strings.ToLower(combined), "rolled back") {
 		t.Errorf("the output claims a rollback that did not happen:\n%s", combined)
+	}
+}
+
+// M9: --data is the place the node is installed to: the profile, the keys, the token file and the
+// unit's ExecStart all follow it instead of the fixed /var/lib/echofog.
+func TestSetupDataFlagMovesTheInstallation(t *testing.T) {
+	r := newInstRig(t)
+	setupSeams(t, r)
+	var out, errb bytes.Buffer
+	code := servernode.MainIO(setupArgs(r, manifestFile(t, r),
+		"--preset", "relay", "--advertise", "203.0.113.10", "--data", "/srv/echofog", "--yes", "--lang", "en"),
+		nil, strings.NewReader(""), &out, &errb)
+	if code != 0 {
+		t.Fatalf("setup with --data: %d\n%s\n%s", code, out.String(), errb.String())
+	}
+	data := filepath.Join(r.root, "srv/echofog")
+	for _, name := range []string{"server-identity.json", "server.json", "operator.token"} {
+		if _, err := os.Stat(filepath.Join(data, name)); err != nil {
+			t.Errorf("%s did not follow --data: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.root, "var/lib/echofog")); !os.IsNotExist(err) {
+		t.Errorf("the fixed data folder was created although --data was given")
+	}
+	unit, err := os.ReadFile(filepath.Join(r.root, "etc/systemd/system/echofog-node.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ExecStart=/usr/local/bin/echofog-node v2 run --data /srv/echofog",
+		"ReadWritePaths=/srv/echofog",
+	} {
+		if !strings.Contains(string(unit), want) {
+			t.Errorf("the unit does not follow --data: %q missing\n%s", want, unit)
+		}
 	}
 }

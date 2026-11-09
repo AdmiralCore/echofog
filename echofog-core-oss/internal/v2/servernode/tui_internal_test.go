@@ -143,8 +143,11 @@ func TestSetupScreenMatchesFlagPlan(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(string(c.preset), func(t *testing.T) {
+			// A non-default data folder makes the unit check real: a unit that ignores the plan's
+			// folder, or a plan that loses it, no longer matches the flag plan.
+			const dataDir = "/srv/echofog"
 			m := testModel("en", 80)
-			m.answers = DefaultAnswers(c.preset, "en", "203.0.113.10", 443, "/var/lib/echofog")
+			m.answers = DefaultAnswers(c.preset, "en", "203.0.113.10", 443, dataDir)
 			m.answers.Domain, m.answers.SiteDir = c.domain, c.siteDir
 			m.answers.Roles = c.roles
 			m.presetIdx = presetIndex(c.preset)
@@ -168,7 +171,7 @@ func TestSetupScreenMatchesFlagPlan(t *testing.T) {
 			if got == nil {
 				t.Fatalf("no plan from the screen (error %v)", m.qerr)
 			}
-			answers := DefaultAnswers(c.preset, "en", "203.0.113.10", 443, "/var/lib/echofog")
+			answers := DefaultAnswers(c.preset, "en", "203.0.113.10", 443, dataDir)
 			answers.Domain, answers.SiteDir = c.domain, c.siteDir
 			answers.Roles = c.roles
 			want, err := PlanFromAnswers(answers)
@@ -180,12 +183,50 @@ func TestSetupScreenMatchesFlagPlan(t *testing.T) {
 			if !bytes.Equal(rawGot, rawWant) {
 				t.Errorf("server.json differs:\n--- screen\n%s\n--- flags\n%s", rawGot, rawWant)
 			}
-			unitGot, _ := UnitFile("echofog", "/var/lib/echofog", "/usr/local/bin/echofog-node")
-			unitWant, _ := UnitFile("echofog", "/var/lib/echofog", "/usr/local/bin/echofog-node")
+			unitGot, err := UnitFile("echofog", got.DataDir, "/usr/local/bin/echofog-node")
+			if err != nil {
+				t.Fatalf("the screen unit: %v", err)
+			}
+			unitWant, err := UnitFile("echofog", want.DataDir, "/usr/local/bin/echofog-node")
+			if err != nil {
+				t.Fatalf("the flag unit: %v", err)
+			}
 			if unitGot != unitWant {
-				t.Error("units differ")
+				t.Errorf("units differ:\n--- screen\n%s\n--- flags\n%s", unitGot, unitWant)
+			}
+			// The unit is built from the plan, not from the fixed folder.
+			for _, line := range []string{
+				"ExecStart=/usr/local/bin/echofog-node v2 run --data " + got.DataDir,
+				"ReadWritePaths=" + got.DataDir,
+			} {
+				if !strings.Contains(unitGot, line) {
+					t.Errorf("the screen unit does not follow the plan's data folder: %q missing\n%s", line, unitGot)
+				}
 			}
 		})
+	}
+}
+
+// M5: a check marked [x] really stops the setup: Enter does not move on and the screen says why.
+func TestSetupChecksStopOnFailure(t *testing.T) {
+	m := testModel("en", 80)
+	m.scr = scrChecks
+	m.checks = []CheckResult{{ID: "ports", Level: LevelFail, Code: "setup.check.ports.busy", Args: []any{"443"}}}
+	m.Update(key(tea.KeyEnter))
+	if m.scr != scrChecks {
+		t.Fatalf("a failed check let the setup continue to screen %v", m.scr)
+	}
+	if m.qerr == "" {
+		t.Fatal("the setup stopped without explaining why")
+	}
+	if !strings.Contains(m.View(), m.qerr) {
+		t.Error("the screen does not show the explanation")
+	}
+	// The same screen advances when nothing is marked [x].
+	m.checks = []CheckResult{{ID: "root", Level: LevelOK, Code: "setup.check.root.ok"}}
+	m.Update(key(tea.KeyEnter))
+	if m.scr != scrPreset {
+		t.Fatalf("a clean check list did not advance: screen %v", m.scr)
 	}
 }
 
