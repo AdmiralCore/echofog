@@ -225,6 +225,8 @@ func UserMessage(err error) string {
 		return "Неизвестный режим уведомлений"
 	case errors.Is(err, ErrInvite):
 		return "Ссылка-приглашение не подходит" // one text for every reason the link does not work
+	case errors.Is(err, ErrGroupClosed):
+		return "Группа закрыта владельцем: её можно только читать"
 	case errors.Is(err, ErrSavedFull):
 		return "Слишком много сохранённых сообщений: удалите ненужные"
 	case errors.Is(err, ErrBadSaved):

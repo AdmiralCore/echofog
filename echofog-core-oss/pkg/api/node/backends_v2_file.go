@@ -1,8 +1,6 @@
 package node
 
 import (
-	"encoding/hex"
-
 	"github.com/echofog/echofog-core/internal/v2/app"
 	"github.com/echofog/echofog-core/pkg/dto"
 )
@@ -79,32 +77,21 @@ func (b *v2MsgBackend) SendFile(pubKeyHex string, path string) (dto.FileTransfer
 	return transferDTO(t), nil
 }
 
-// SendGroupFile offers a file to the members of a group. The offer reaches each member as a file
-// message; the channel and the thread only place the answer for the screen, the offer itself has no
-// field for them.
+// SendGroupFile posts a file in a group (T11.3e): in the channel and the thread the caller names.
 func (b *v2MsgBackend) SendGroupFile(groupID, channel, thread, path string) (GroupMessageDTO, error) {
 	ctx, cancel := v2Ctx()
 	defer cancel()
-	ms, err := b.app.GroupMembers(groupID)
+	t, err := b.app.SendGroupFile(ctx, groupID, channel, thread, path)
 	if err != nil {
 		return GroupMessageDTO{}, v2Err(err)
 	}
-	var to [][32]byte
 	var self string
-	for _, m := range ms {
-		if m.Self {
-			self = m.Node
-			continue
+	if ms, merr := b.app.GroupMembers(groupID); merr == nil {
+		for _, m := range ms {
+			if m.Self {
+				self = m.Node
+			}
 		}
-		raw, derr := hex.DecodeString(m.Node)
-		if derr != nil || len(raw) != 32 {
-			continue
-		}
-		to = append(to, [32]byte(raw))
-	}
-	t, err := b.app.SendGroupFile(ctx, groupID, to, path)
-	if err != nil {
-		return GroupMessageDTO{}, v2Err(err)
 	}
 	return GroupMessageDTO{ID: t.ID, GroupID: groupID, Sender: self, Text: t.Name, Timestamp: t.Created.UnixMilli(), IsMine: true, Verified: true,
 		File: &GroupFileDTO{ID: t.ID, Name: t.Name, Size: t.Size, Mime: t.Mime, Channel: channel, Thread: thread}}, nil

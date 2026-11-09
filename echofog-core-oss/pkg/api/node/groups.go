@@ -44,6 +44,8 @@ type GroupDTO struct {
 	CreatedAt   int64  `json:"createdAt"`
 	Members     int    `json:"members"`
 	MyRole      string `json:"myRole"`
+	// Closed: the owner closed the group; it is an archive to read
+	Closed bool `json:"closed,omitempty"`
 }
 
 type GroupMemberDTO struct {

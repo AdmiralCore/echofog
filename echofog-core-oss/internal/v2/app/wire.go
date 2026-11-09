@@ -34,7 +34,7 @@ func (a *App) OnIncoming(ctx context.Context, from [32]byte, pm *chatpb.Personal
 	switch pm.GetType() {
 	case chatpb.PersonalMessageType_MSG_TYPE_FILE:
 		if !blocked {
-			_ = a.OnFileOffer(from, a.groupOfSender(ctx, from), pm)
+			_ = a.OnFileOffer(from, pm)
 		}
 		return true
 	case chatpb.PersonalMessageType_MSG_TYPE_VOICE:

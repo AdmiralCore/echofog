@@ -205,7 +205,9 @@ func New(cfg Config) (*App, error) {
 	a := &App{cfg: cfg}
 	if cfg.Groups != nil && cfg.Convs != nil {
 		cfg.Groups.attach(cfg.Convs.Log())
-		cfg.Convs.Log().OnChange(a.onGroupChange)
+	}
+	if cfg.Convs != nil {
+		cfg.Convs.Log().OnChange(a.onLogChange)
 	}
 	return a, nil
 }

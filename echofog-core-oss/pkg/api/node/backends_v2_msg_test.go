@@ -49,7 +49,8 @@ type fakeMsg struct {
 	transfer app.Transfer
 	filePeer string
 	fileGrp  string
-	fileMem  [][32]byte
+	fileCh   string
+	fileTh   string
 }
 
 func (f *fakeMsg) note(s string) {
@@ -271,9 +272,9 @@ func (f *fakeMsg) SendFile(_ context.Context, peer, path string) (app.Transfer, 
 	f.mu.Unlock()
 	return f.transfer, f.fail
 }
-func (f *fakeMsg) SendGroupFile(_ context.Context, group string, members [][32]byte, path string) (app.Transfer, error) {
+func (f *fakeMsg) SendGroupFile(_ context.Context, group, channel, thread, path string) (app.Transfer, error) {
 	f.mu.Lock()
-	f.fileGrp, f.fileMem = group, members
+	f.fileGrp, f.fileCh, f.fileTh = group, channel, thread
 	f.mu.Unlock()
 	return f.transfer, f.fail
 }
@@ -717,8 +718,8 @@ func TestV2GroupMessagesOfV1GoThroughTheChat(t *testing.T) {
 
 func TestV2WhatTheAppCannotDoYetIsNotBuilt(t *testing.T) {
 	api, _ := newMsgApi(t)
-	// closing a group and a file in a group wait for the wire (SPEC-FIX-1108, T11.3e-1): no guess at a format
-	require.ErrorIs(t, api.DeleteGroup(groupID), ErrV2NotBuilt)
+	// the reset of a session has no counterpart in v2: the sessions are not reset by hand
+	require.ErrorIs(t, api.ResetEncryptionSession(nodeBob), ErrV2NotBuilt)
 }
 
 // ---- files ---------------------------------------------------------------------------------------------------
@@ -751,7 +752,7 @@ func TestV2FilesMapTransfers(t *testing.T) {
 	require.Equal(t, "/downloads", api.DownloadDir())
 }
 
-func TestV2SendFileTakesANodeOrAnAccountKeyAndSendGroupFileNamesTheMembers(t *testing.T) {
+func TestV2SendFileTakesANodeOrAnAccountKeyAndSendGroupFileNamesTheChannelAndThread(t *testing.T) {
 	api, f := newMsgApi(t)
 	f.transfer = app.Transfer{ID: "f2", Name: "b.bin", Size: 5, Group: groupID}
 	_, err := api.SendFile(nodeBob, "/tmp/b.bin")
@@ -762,7 +763,8 @@ func TestV2SendFileTakesANodeOrAnAccountKeyAndSendGroupFileNamesTheMembers(t *te
 	m, err := api.SendGroupFile(groupID, "news", "t1", "/tmp/b.bin")
 	require.NoError(t, err)
 	require.Equal(t, groupID, f.fileGrp)
-	require.Len(t, f.fileMem, 2, "the group's members, not oneself")
+	require.Equal(t, "news", f.fileCh, "the channel the caller chose goes to the app")
+	require.Equal(t, "t1", f.fileTh, "the thread too")
 	require.Equal(t, GroupMessageDTO{ID: "f2", GroupID: groupID, Sender: nodeMe, Text: "b.bin", IsMine: true, Verified: true,
 		File: &GroupFileDTO{ID: "f2", Name: "b.bin", Size: 5, Channel: "news", Thread: "t1"}}, withoutTime(m))
 }

@@ -194,6 +194,8 @@ type groupEvents struct {
 	next int
 	// addedAt: when this node was let into a group, for the window in which its history arrives
 	addedAt map[string]time.Time
+	// closedTold: the groups whose closing the screen was told of
+	closedTold map[string]bool
 }
 
 // historyWindow is how long after being let in a group the messages of others count as its earlier history.

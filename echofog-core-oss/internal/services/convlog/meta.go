@@ -65,6 +65,8 @@ type Meta struct {
 	// Rebuild: a membership change arrived that sits before events already applied; the views are
 	// computed again from the stored events (see Log.rebuild).
 	Rebuild bool `json:"rebuild,omitempty"`
+	// Closed: the owner closed the group (group.close); it takes nothing beyond the close vector.
+	Closed bool `json:"closed,omitempty"`
 	// HeldLamport is the highest clock of an event kept without effects (not allowed, yet): a
 	// membership event at or below it may change what that event was allowed to do.
 	HeldLamport uint64 `json:"held_lamport,omitempty"`

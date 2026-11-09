@@ -40,7 +40,10 @@ func appKind(k string) string {
 // not brought yet shows none.
 func (b *v2MsgBackend) groupDTO(g app.GroupInfo) GroupDTO {
 	out := GroupDTO{ID: g.ID, Title: g.Title, Description: g.Description, Kind: v1Kind(g.Kind), CreatedAt: g.Created,
-		Members: g.Members, MyRole: g.Role}
+		Members: g.Members, MyRole: g.Role, Closed: g.Closed}
+	if g.Closed {
+		out.ReadOnly = true // an archive: read, nothing else
+	}
 	if g.Pending {
 		return out
 	}
@@ -66,6 +69,14 @@ func (b *v2MsgBackend) CreateGroup(title, description, kind string) (GroupDTO, e
 		return GroupDTO{}, v2Err(err)
 	}
 	return b.groupDTO(g), nil
+}
+
+// DeleteGroup closes the group for everybody (the owner only). The members keep an archive to read; the
+// copies they hold do not go away.
+func (b *v2MsgBackend) DeleteGroup(groupID string) error {
+	ctx, cancel := v2Ctx()
+	defer cancel()
+	return v2Err(b.app.GroupClose(ctx, groupID))
 }
 
 func (b *v2MsgBackend) ListGroups() ([]GroupDTO, error) {

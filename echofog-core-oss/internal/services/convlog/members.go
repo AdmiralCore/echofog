@@ -645,7 +645,7 @@ func msgAllowed(e *Event, r Rights) bool {
 	if proto.Unmarshal(e.Body, &b) != nil {
 		return true // applyMsg refuses it
 	}
-	return (r.Media || b.Metadata == "") && (r.Links || !HasLink(b.Text))
+	return (r.Media || b.Metadata == "" && b.Att == nil) && (r.Links || !HasLink(b.Text))
 }
 
 // editAllowed: an edit puts in no link its author may not post.

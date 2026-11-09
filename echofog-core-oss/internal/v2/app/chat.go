@@ -214,7 +214,6 @@ func (s *ChatStates) OnStatus(id [16]byte, st chat.State) {
 
 // chatState holds the subscribers of chat changes.
 type chatState struct {
-	once sync.Once
 	mu   sync.Mutex
 	subs map[int]func(ConvChange)
 	next int
@@ -245,7 +244,11 @@ func (a *App) resolve(ctx context.Context, ref ChatRef, write bool) (convlog.Con
 		return convlog.Conv{}, err
 	}
 	if ref.Kind == KindGroup {
-		return a.resolveGroup(cv, ref)
+		c, err := a.resolveGroup(cv, ref)
+		if err == nil && write && cv.Log().Closed(c) {
+			return convlog.Conv{}, ErrGroupClosed
+		}
+		return c, err
 	}
 	if ref.Kind != KindDM {
 		return convlog.Conv{}, ErrNoChat
@@ -615,7 +618,6 @@ func (a *App) ChatMarkRead(ctx context.Context, ref ChatRef, id string) error {
 
 // SubscribeChats calls fn for every change of a chat until cancel is called.
 func (a *App) SubscribeChats(fn func(ConvChange)) (cancel func()) {
-	a.chats.once.Do(a.hookChats)
 	a.chats.mu.Lock()
 	defer a.chats.mu.Unlock()
 	if a.chats.subs == nil {
@@ -631,15 +633,28 @@ func (a *App) SubscribeChats(fn func(ConvChange)) (cancel func()) {
 	}
 }
 
-func (a *App) hookChats() {
-	cv, err := a.convs()
-	if err != nil {
-		return
+// onLogChange runs for every change of a log: the group's own business, the file cards of new messages,
+// then the subscribers of the chat.
+func (a *App) onLogChange(ch convlog.Change) {
+	fresh := a.freshOf(ch.Messages)
+	if a.cfg.Groups != nil {
+		a.onGroupChange(ch)
 	}
-	cv.Log().OnChange(a.onChatChange)
+	if ch.Conv.Kind == KindGroup && len(fresh) > 0 {
+		isNew := make(map[string]bool, len(fresh))
+		for _, id := range fresh {
+			isNew[id] = true
+		}
+		for _, m := range ch.Messages {
+			if isNew[m.ID] {
+				a.offerFromEvent(ch.Conv, m)
+			}
+		}
+	}
+	a.onChatChange(ch, fresh)
 }
 
-func (a *App) onChatChange(ch convlog.Change) {
+func (a *App) onChatChange(ch convlog.Change, fresh []string) {
 	e, ok := a.entry(ch.Conv, ch.Meta)
 	if !ok {
 		return
@@ -650,7 +665,7 @@ func (a *App) onChatChange(ch convlog.Change) {
 		subs = append(subs, f)
 	}
 	a.chats.mu.Unlock()
-	out := ConvChange{Ref: e.Ref, Conversation: e, Messages: a.dress(ch.Messages), Reload: ch.Rebuilt || len(ch.Members) > 0, Rev: ch.Rev, Fresh: a.freshOf(ch.Messages)}
+	out := ConvChange{Ref: e.Ref, Conversation: e, Messages: a.dress(ch.Messages), Reload: ch.Rebuilt || len(ch.Members) > 0, Rev: ch.Rev, Fresh: fresh}
 	for _, f := range subs {
 		f(out)
 	}

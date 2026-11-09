@@ -81,7 +81,8 @@ type v2Messenger interface {
 	// files
 	OnFileTransfer(cb func(app.Transfer)) func()
 	SendFile(ctx context.Context, peerHex, path string) (app.Transfer, error)
-	SendGroupFile(ctx context.Context, group string, members [][32]byte, path string) (app.Transfer, error)
+	SendGroupFile(ctx context.Context, group, channel, thread, path string) (app.Transfer, error)
+	GroupClose(ctx context.Context, id string) error
 	AcceptFile(id string) (app.Transfer, error)
 	DeclineFile(id string) error
 	CancelFile(id string) error

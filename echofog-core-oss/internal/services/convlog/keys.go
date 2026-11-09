@@ -21,6 +21,8 @@ const (
 	pfxChan   = "cl/c/" // bc/channel      -> Channel
 	pfxChanO  = "cl/q/" // bc/channel/^lamport/id -> id: a channel's history, newest first
 	pfxProf   = "cl/g/" // bc              -> Profile: a group's picture
+	pfxAtt    = "cl/a/" // bc/fid/id       -> id: the message that carries a file
+	pfxClose  = "cl/x/" // bc              -> closeRec: the accepted close of a group
 )
 
 func (l *Log) bc(c ConvID) string { return storage.BlindID(l.st, "conv:"+c.String()) }
