@@ -19,6 +19,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/release"
+	"github.com/echofog/echofog-core/internal/v2/releasekeys"
 )
 
 var (
@@ -65,7 +66,8 @@ var releaseKeysSpec string
 var buildReleaseKeys []keys.AKey
 
 func init() {
-	// TODO: parse releaseKeysSpec
+	buildReleaseKeys = releasekeys.MustParseSpec("servernode", releaseKeysSpec)
+	ReleaseKeys = buildReleaseKeys
 }
 
 // maxArtifactSize bounds a download: a node binary is far smaller.

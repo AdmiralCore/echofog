@@ -5,6 +5,7 @@ import (
 	_ "embed"
 
 	"github.com/echofog/echofog-core/internal/v2/keys"
+	"github.com/echofog/echofog-core/internal/v2/releasekeys"
 )
 
 // Official list of the release. The file is empty in the OSS source tree: a source build has no
@@ -36,5 +37,6 @@ var releaseKeysSpec string
 var buildReleaseKeys []keys.AKey
 
 func init() {
-	// TODO: parse releaseKeysSpec
+	buildReleaseKeys = releasekeys.MustParseSpec("bootstrap", releaseKeysSpec)
+	ReleaseKeys = buildReleaseKeys
 }
