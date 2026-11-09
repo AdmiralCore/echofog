@@ -177,7 +177,6 @@ type Receiver struct {
 	mu     sync.Mutex // one Tick at a time
 	queues map[[16]byte]*queueState
 	req    uint64
-	held   map[string]time.Time // items the handler did not take, by queue and id: first seen
 }
 
 // NewReceiver builds a Receiver over its stored queues.
@@ -381,9 +380,10 @@ func (r *Receiver) poll(ctx context.Context, conn Conn, q *queueState, current b
 		wait = 0 // only the first request of a poll waits
 		var ids [][]byte
 		for _, it := range items.Items {
-			if r.cfg.Handle(ctx, it.Blob) || r.giveUp(q.Queue, it.ID) {
+			// An item the handler did not process stays on the relay for a later attempt until its
+			// 7-day expiry (services.md 5.3.4, K9). Only a processed item is acknowledged.
+			if r.cfg.Handle(ctx, it.Blob) {
 				ids = append(ids, it.ID)
-				r.forget(q.Queue, it.ID)
 			}
 		}
 		if len(ids) > 0 {
@@ -407,30 +407,4 @@ func (r *Receiver) poll(ctx context.Context, conn Conn, q *queueState, current b
 const (
 	// maxPollPages bounds one poll: a queue holds at most 500 items, 100 to a page.
 	maxPollPages = 10
-	// holdFor is how long an item the handler does not take is kept in the queue; after it the item is
-	// acknowledged and lost, so that items nobody can handle (a sender that cannot be looked up) block
-	// nothing for long.
-	holdFor = time.Hour
-	// maxHeld bounds the table of such items; past it an item is given up at once.
-	maxHeld = 4096
 )
-
-// giveUp notes that the handler did not take an item and says whether it has waited long enough.
-func (r *Receiver) giveUp(queue [16]byte, id []byte) bool {
-	now := r.cfg.Now()
-	key := string(queue[:]) + string(id)
-	if r.held == nil {
-		r.held = map[string]time.Time{}
-	}
-	first, ok := r.held[key]
-	if !ok {
-		if len(r.held) >= maxHeld {
-			return true
-		}
-		r.held[key] = now
-		return false
-	}
-	return now.Sub(first) >= holdFor
-}
-
-func (r *Receiver) forget(queue [16]byte, id []byte) { delete(r.held, string(queue[:])+string(id)) }
