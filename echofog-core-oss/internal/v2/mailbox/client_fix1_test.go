@@ -8,15 +8,16 @@ import (
 	"time"
 )
 
-// Items the handler does not take must not hide the ones behind them: the poll reads on past them, and
-// what stays unhandled for an hour is given up (acknowledged), so a flood of such items blocks nothing
-// for long.
+// Items the handler does not take must not hide the ones behind them: the poll reads on past them. An
+// item left unhandled is never acknowledged: it stays on the relay for a later attempt until its
+// 7-day expiry (services.md 5.3.4, K9). holdFor bounds one delivery attempt, not the item lifetime.
 func TestReceiverReadsPastItemsItDoesNotTake(t *testing.T) {
 	w := newWorld(t)
+	var takeBad bool
 	var good int
 	r, _ := w.receiver(t, func(b []byte) bool {
 		if bytes.HasPrefix(b, []byte("bad")) {
-			return false
+			return takeBad
 		}
 		good++
 		return true
@@ -43,12 +44,44 @@ func TestReceiverReadsPastItemsItDoesNotTake(t *testing.T) {
 	if n := w.m.fx.srv.PrivateItems(); n != 300 {
 		t.Fatalf("M holds %d items, want the 300 not taken", n)
 	}
-	// an hour later they are given up
+	// an hour later the unhandled items are still there: they were not acknowledged, so a transient
+	// failure can still be repaired
 	w.clock.Advance(61 * time.Minute)
 	_ = r.Tick(context.Background())
+	if n := w.m.fx.srv.PrivateItems(); n != 300 {
+		t.Fatalf("M holds %d items an hour later, want all 300: unhandled items must not be ACKed", n)
+	}
+	// a later attempt that succeeds processes and acknowledges them
+	takeBad = true
 	_ = r.Tick(context.Background())
 	if n := w.m.fx.srv.PrivateItems(); n != 0 {
-		t.Fatalf("M still holds %d items after the hour", n)
+		t.Fatalf("M still holds %d items after they were handled", n)
+	}
+}
+
+// An unhandled item lives to its 7-day expiry on the relay (services.md 5.3.4): the receiver does not
+// cut it short locally.
+func TestReceiverKeepsUnhandledItemsForSevenDays(t *testing.T) {
+	w := newWorld(t)
+	r, _ := w.receiver(t, func([]byte) bool { return false }, nil)
+	_ = r.Tick(context.Background())
+	q := r.Queues()[0]
+	s := &Sender{Dial: w.n}
+	for i := 0; i < 10; i++ {
+		if st, err := s.Deposit(context.Background(), w.f.device, w.target(q.Queue[:]), []byte(fmt.Sprintf("bad %d", i))); err != nil || st != StatusStored {
+			t.Fatalf("deposit %d: %d %v", i, st, err)
+		}
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.m.fx.srv.PrivateItems(); n != 10 {
+		t.Fatalf("M holds %d items, want 10", n)
+	}
+	w.clock.Advance(8 * 24 * time.Hour) // past the 7-day item lifetime
+	_ = r.Tick(context.Background())
+	if n := w.m.fx.srv.PrivateItems(); n != 0 {
+		t.Fatalf("M still holds %d items after their 7-day expiry", n)
 	}
 }
 
