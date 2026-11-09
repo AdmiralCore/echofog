@@ -49,7 +49,7 @@ func main() {
 
 func run(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("a command is required: keygen, assemble, cosign, sign, verify, install-stamp, install-fingerprint, install-record or install-rotation")
+		return errors.New("a command is required: keygen, assemble, cosign, sign, verify, bootstrap-sign, bootstrap-verify, install-stamp, install-fingerprint, install-record or install-rotation")
 	}
 	switch args[0] {
 	case "keygen":
@@ -62,6 +62,10 @@ func run(args []string, stdout io.Writer) error {
 		return cmdSign(args[1:], stdout)
 	case "verify":
 		return cmdVerify(args[1:], stdout)
+	case "bootstrap-sign":
+		return cmdBootstrapSign(args[1:], stdout)
+	case "bootstrap-verify":
+		return cmdBootstrapVerify(args[1:], stdout)
 	case "install-stamp":
 		return cmdInstallStamp(args[1:], stdout)
 	case "install-fingerprint":
