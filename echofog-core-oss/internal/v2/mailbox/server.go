@@ -639,10 +639,11 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 }
 
 // Deposit stores one blob in a queue. It returns the DEPOSITED status and, when stored, the item
-// id. A public queue is the first-contact path, so its sender is external: a bad proof of work gets
-// the same StatusRefused as every other refusal of an external sender (AD20, decision Q4); a
-// missing one is StatusPowRequired. A direct deposit into a public queue is deduplicated by the
-// envelope, so one proof of work buys one slot (services.md 5.2).
+// id. A sender that is not the queue owner is external: "no queue", "full", a missing proof and a
+// bad proof all answer one StatusRefused, so the relay is not an oracle for whether a public queue
+// exists or how full it is (AD20, services.md 5.1). The owner is on the authenticated path and keeps
+// the real codes; its bad proof is ErrPowInvalid (ERROR{0x100} in handler.go). A direct deposit into
+// a public queue is deduplicated by the envelope, so one proof of work buys one slot (services.md 5.2).
 func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	if len(m.Queue) != QueueSize {
 		return StatusUnknownQueue, nil, nil
@@ -661,20 +662,27 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	if err != nil {
 		s.mu.Unlock()
 		if errors.Is(err, ErrUnknownQueue) {
-			return StatusUnknownQueue, nil, nil
+			// Without a record there is no owner to authenticate, so every sender is external here.
+			return StatusRefused, nil, nil
 		}
 		return 0, nil, err
 	}
+	// The owner is the node that created the queue. Everyone else (a first contact on a public
+	// queue, or a sender hidden behind a forwarding relay) must not be able to tell the queue state.
+	external := !bytes.Equal(p.Node[:], rec.Owner[:])
 	if s.cfg.Metered {
 		s.mu.Unlock()
 		return StatusRefused, nil, nil
 	}
 	if rec.Public && !ValidPow(m.Queue, m.Blob, m.Pow, rec.PowBits) {
 		s.mu.Unlock()
+		if external {
+			return StatusRefused, nil, nil
+		}
 		if m.Pow == 0 {
 			return StatusPowRequired, nil, nil
 		}
-		return StatusRefused, nil, nil
+		return 0, nil, ErrPowInvalid
 	}
 
 	// One blob, one slot: a repeat with valid work is answered stored without a second item for the
@@ -699,6 +707,9 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	items, bytes := s.queueLimits(rec)
 	if int(rec.Count)+1 > items || rec.Bytes+int64(len(m.Blob)) > bytes {
 		s.mu.Unlock()
+		if external {
+			return StatusRefused, nil, nil
+		}
 		return StatusFull, nil, nil
 	}
 	total, err := s.totalLocked(rec.Public)
@@ -708,6 +719,9 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	}
 	if int(total.Items)+1 > s.lim.TotalItems || total.Bytes+uint64(len(m.Blob)) > uint64(s.lim.TotalBytes) {
 		s.mu.Unlock()
+		if external {
+			return StatusRefused, nil, nil
+		}
 		return StatusFull, nil, nil
 	}
 	if !s.quotaAllowsLocked(now, p, 1, uint64(len(m.Blob))) {
@@ -997,10 +1011,12 @@ const (
 
 // forwardOn is the role F: pass a FORWARD on to the mailbox relay it names. F cannot read the sealed
 // deposit. The sender's quota per day (node ID and unit) is checked first and spent whatever M
-// answers; a new connection costs one of ten dials a minute for the sender's session.
+// answers; a new connection costs one of ten dials a minute for the sender's session. The caller is
+// the external sender, so F keeps only stored and too-large and maps every other status, including
+// its own relay-unreachable, to refused (services.md 5.3, AD20).
 func (s *Server) forwardOn(ctx context.Context, p Peer, m Forward) (uint32, error) {
 	if s.cfg.Forwarder == nil || len(m.Relay) != 32 {
-		return StatusRelayUnreachable, nil
+		return StatusRefused, nil
 	}
 	if s.cfg.Metered {
 		return StatusRefused, nil
@@ -1054,14 +1070,25 @@ func (s *Server) forwardOn(ctx context.Context, p Peer, m Forward) (uint32, erro
 	select {
 	case r := <-done:
 		if r.err != nil {
-			return StatusRelayUnreachable, nil
+			return StatusRefused, nil
 		}
-		return r.st, nil
+		return externalStatus(r.st), nil
 	case <-s.aft(ForwardTimeout):
 		cancel()
-		return StatusRelayUnreachable, nil
+		return StatusRefused, nil
 	case <-ctx.Done():
-		return StatusRelayUnreachable, nil
+		return StatusRefused, nil
+	}
+}
+
+// externalStatus is what an external sender may see of a mailbox answer (services.md 5.1, 5.3): only
+// stored and too-large keep their meaning; 1, 2, 4, 5 and 6 all collapse into refused.
+func externalStatus(st uint32) uint32 {
+	switch st {
+	case StatusStored, StatusTooLarge:
+		return st
+	default:
+		return StatusRefused
 	}
 }
 

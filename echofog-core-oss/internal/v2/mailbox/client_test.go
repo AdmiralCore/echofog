@@ -140,6 +140,14 @@ func (f *fakeForwarder) Forward(ctx context.Context, m Forward) (uint32, error) 
 	return srv.Forward(ctx, f.as, m)
 }
 
+// callCount is how many times F reached its forwarder; with AD20 the status no longer separates "F
+// tried" from "F was refused by policy", so the tests count the attempts.
+func (f *fakeForwarder) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func senderPeer(node byte) func([32]byte) Peer {
 	return func([32]byte) Peer {
 		return Peer{Node: [32]byte{0x5e, node}, Device: [32]byte{0x5d, node}, Path: mux.PathDirect,
@@ -198,18 +206,26 @@ func TestForwardingRelayQuotaPerSenderNode(t *testing.T) {
 		return st
 	}
 	for i := 0; i < 3; i++ {
-		if st := send(1); st == StatusRefused {
-			t.Fatalf("forward %d refused within the quota", i)
+		before := fw.callCount()
+		send(1)
+		if fw.callCount() != before+1 {
+			t.Fatalf("forward %d did not reach the relay", i)
 		}
 	}
-	if st := send(1); st != StatusRefused {
-		t.Fatalf("the fourth: %d, want refused", st)
+	before := fw.callCount()
+	send(1)
+	if fw.callCount() != before {
+		t.Fatalf("the fourth forward reached the relay within the quota")
 	}
-	if st := send(2); st != StatusRefused { // a new session does not reset the quota
-		t.Fatalf("on a new session: %d, want refused", st)
+	before = fw.callCount()
+	send(2) // a new session does not reset the quota
+	if fw.callCount() != before {
+		t.Fatalf("a new session reset the quota")
 	}
 	clock.Advance(25 * time.Hour)
-	if st := send(1); st == StatusRefused {
+	before = fw.callCount()
+	send(1)
+	if fw.callCount() != before+1 {
 		t.Fatal("the quota did not renew the next day")
 	}
 }
@@ -226,29 +242,38 @@ func TestForwardingRelayDialsAreLimitedPerSession(t *testing.T) {
 		return st
 	}
 	for i := 0; i < 10; i++ { // ten different relays, none connected: ten dials
-		if st := send(1, byte(i+1)); st == StatusRefused {
-			t.Fatalf("dial %d refused", i)
+		before := fw.callCount()
+		send(1, byte(i+1))
+		if fw.callCount() != before+1 {
+			t.Fatalf("dial %d did not reach the forwarder", i)
 		}
 	}
-	if st := send(1, 99); st != StatusRefused {
-		t.Fatalf("the eleventh dial of one session: %d", st)
+	before := fw.callCount()
+	send(1, 99)
+	if fw.callCount() != before {
+		t.Fatalf("the eleventh dial of one session reached the forwarder")
 	}
 	fw.connected[string(bytes.Repeat([]byte{3}, 32))] = true
-	if st := send(1, 3); st == StatusRefused {
-		t.Fatal("a forward over an existing session counted as a dial")
+	before = fw.callCount()
+	send(1, 3)
+	if fw.callCount() != before+1 {
+		t.Fatal("a forward over an existing session was blocked")
 	}
 	clock.Advance(61 * time.Second)
-	if st := send(1, 99); st == StatusRefused {
+	before = fw.callCount()
+	send(1, 99)
+	if fw.callCount() != before+1 {
 		t.Fatal("the dial budget did not renew after a minute")
 	}
 }
 
-func TestWithoutAForwarderFORWARDIsUnreachable(t *testing.T) {
+func TestWithoutAForwarderFORWARDIsRefused(t *testing.T) {
 	clock := newTestClock()
 	f := newRelay(t, clock, nil)
 	st, err := f.fx.srv.Forward(context.Background(), f.fx.peer(1), Forward{Req: 1, Relay: bytes.Repeat([]byte{1}, 32), Sealed: bytes.Repeat([]byte{2}, 100)})
-	if err != nil || st != StatusRelayUnreachable {
-		t.Fatalf("%d %v", st, err)
+	// An external sender must not learn that F has no forwarder: refused, not relay-unreachable.
+	if err != nil || st != StatusRefused {
+		t.Fatalf("%d %v, want refused", st, err)
 	}
 }
 
@@ -359,9 +384,9 @@ func TestSenderDepositsThroughF(t *testing.T) {
 func TestSenderReportsWhatMAnswered(t *testing.T) {
 	w := newWorld(t)
 	s := &Sender{Dial: w.n}
-	// a queue that does not exist: unknown-queue
-	if st, err := s.Deposit(context.Background(), w.f.device, w.target(w.m.fx.queue), []byte("x")); err != nil || st != StatusUnknownQueue {
-		t.Fatalf("unknown queue: %d %v", st, err)
+	// a queue that does not exist is refused to the external sender (services.md 5.1, AD20)
+	if st, err := s.Deposit(context.Background(), w.f.device, w.target(w.m.fx.queue), []byte("x")); err != nil || st != StatusRefused {
+		t.Fatalf("unknown queue: %d %v, want refused", st, err)
 	}
 	// a blob above 64 KiB never leaves
 	if _, err := s.Deposit(context.Background(), w.f.device, w.target(w.m.fx.queue), make([]byte, MaxBlob+1)); !errors.Is(err, ErrTooLarge) {
@@ -372,11 +397,11 @@ func TestSenderReportsWhatMAnswered(t *testing.T) {
 	if _, err := s.Deposit(context.Background(), w.f.device, w.target(w.m.fx.queue), []byte("x")); err == nil {
 		t.Fatal("an unreachable F was not an error")
 	}
-	// a full queue
+	// a full queue is also refused to the external sender
 	w.n.failing[w.f.device] = false
 	w.m.fx.srv.lim.PrivateItems = 1
 	w.m.fx.create(t, w.m.fx.peer(1), 2, false, 0)
-	for i, want := range []uint32{StatusStored, StatusFull} {
+	for i, want := range []uint32{StatusStored, StatusRefused} {
 		if st, err := s.Deposit(context.Background(), w.f.device, w.target(w.m.fx.queue), []byte(fmt.Sprint("m", i))); err != nil || st != want {
 			t.Fatalf("deposit %d: %d %v, want %d", i, st, err, want)
 		}

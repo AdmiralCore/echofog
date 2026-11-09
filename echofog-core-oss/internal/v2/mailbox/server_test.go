@@ -410,6 +410,10 @@ func TestDepositRefusalDependsOnQueueOwnership(t *testing.T) {
 		}
 
 		blob := []byte("first contact")
+		// Find a blob for which the zero value is not itself a valid proof, so "absent" is testable.
+		for ValidPow(f.queue, blob, 0, 1) {
+			blob = append(blob, 'x')
+		}
 		// Missing proof: the owner is told to compute one, the external sender only sees refused.
 		if st, _, err := f.srv.Deposit(external, Deposit{Req: 1, Queue: f.queue, Blob: blob}); err != nil || st != StatusRefused {
 			t.Fatalf("external without pow: status %d err %v, want refused", st, err)
