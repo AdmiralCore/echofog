@@ -86,15 +86,16 @@ func New(cfg Config) *Bridge {
 	return &Bridge{cfg: cfg, wrapper: map[wkey]wentry{}, joined: map[pair]struct{}{}}
 }
 
-// SendSignal sends a v1 envelope the call layer produced to a neighbour. lossy copies are skipped:
-// call/2 duplicates lossy signals on CALL_SIGNAL itself when it sends the reliable one.
+// SendSignal sends a v1 envelope the call layer produced to a neighbour. A lossy copy is skipped
+// when the call layer also sends that signal reliably: call/2 duplicates it on CALL_SIGNAL itself.
+// A viewer's path feedback travels only on the lossy copy, so that one must go on.
 func (b *Bridge) SendSignal(to [32]byte, lossy bool, payload []byte) error {
-	if lossy {
-		return nil
-	}
 	m, err := v1sig.ToPB(payload)
 	if err != nil {
 		return err
+	}
+	if lossy && m.Action != pb.Action_ACTION_STREAM_FEEDBACK {
+		return nil
 	}
 	peer := call.Peer{Device: to}
 	if !bytes.Equal(m.Sender, b.cfg.Self[:]) {
