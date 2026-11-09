@@ -669,7 +669,7 @@ func TestSwitchOverTheLinuxFirewall(t *testing.T) {
 	if err := sw.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(j.Entries(), ","); got != "fw.install,tun.up,dns.protect" {
+	if got := strings.Join(j.Entries(), ","); got != "tun.up,dns.protect" {
 		t.Fatalf("order %q", got)
 	}
 	if len(e.all()) == 0 {
@@ -678,7 +678,7 @@ func TestSwitchOverTheLinuxFirewall(t *testing.T) {
 	if err := sw.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(j.Entries(), ","); !strings.HasSuffix(got, "tun.down,dns.restore,fw.remove") {
+	if got := strings.Join(j.Entries(), ","); got != "tun.up,dns.protect,tun.down,dns.restore" {
 		t.Fatalf("order %q", got)
 	}
 }
@@ -700,5 +700,24 @@ func TestStateFileIsJSON(t *testing.T) {
 	}
 	if st.Links[0].Name != "eth0" || !st.Links[0].DefaultRoute {
 		t.Fatalf("%+v", st)
+	}
+}
+
+// The identifiers in the guide a person uses to take the protection off are the ones in the code.
+func TestRemovalGuideNamesTheSameIdentifiers(t *testing.T) {
+	for _, rel := range []string{
+		`../../../../../docs/kill-switch-linux.md`,
+		`../../../../../docs/kill-switch-linux.ru.md`,
+	} {
+		raw, err := os.ReadFile(rel)
+		if err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+		text := string(raw)
+		for _, want := range []string{TableName, tunnelName, "efv2 killswitch remove", dnsStatePath()} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not contain %q", rel, want)
+			}
+		}
 	}
 }
