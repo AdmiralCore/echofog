@@ -628,3 +628,38 @@ func waitFor(t *testing.T, within time.Duration, cond func() bool) {
 	}
 	t.Fatalf("condition not reached within %v", within)
 }
+
+// A peer that dials again after its network went away must not be refused as a duplicate while the
+// old session is still alive on the accepting side: both sessions have the same initiator, so the
+// smaller-initiator rule says nothing, and the newer one is the dialer's choice (T3.13). The lab saw
+// the new session answered with GOAWAY by a peer that had not yet noticed that the old one was dead.
+func TestTableSameInitiatorRedialReplacesTheOldSession(t *testing.T) {
+	now := time.Now()
+	a, b := newTestNode(t), newTestNode(t)
+	ac, bc := a.cards(t, now), b.cards(t, now)
+	bCard := verifyCard(t, bc.peer, now)
+	aLocal := localWithFeatures(a, ac)
+	bLocal := localWithFeatures(b, bc)
+	tB := newTable(t)
+
+	_, oldAcc := establishWith(t, memcarrier.NewQUIC(), bCard, aLocal, session.AcceptConfig{Local: bLocal})
+	if kept, err := tB.Add(bLocal, oldAcc); err != nil || kept != oldAcc {
+		t.Fatalf("first Add: %v %v", kept, err)
+	}
+	_, newAcc := establishWith(t, memcarrier.NewQUIC(), bCard, aLocal, session.AcceptConfig{Local: bLocal})
+	kept, err := tB.Add(bLocal, newAcc)
+	if err != nil {
+		t.Fatalf("second Add: %v", err)
+	}
+	if kept != newAcc {
+		t.Fatal("the redial of the same initiator was refused as a duplicate of the old session")
+	}
+	waitDone(t, oldAcc.Session, 5*time.Second)
+	var ga *mux.GoAwayError
+	if err := oldAcc.Session.Err(); !errors.As(err, &ga) || ga.Code != frame.CodeNoError {
+		t.Fatalf("old session ended with %v, want GOAWAY{no-error}", err)
+	}
+	if tB.Len() != 1 {
+		t.Fatalf("table holds %d sessions, want 1", tB.Len())
+	}
+}

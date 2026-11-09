@@ -34,6 +34,14 @@ func (r *Runtime) Chat() *chat.Service {
 	return r.chat
 }
 
+// chatDirectory is the directory chat/2 and files/2 look accounts up in.
+func (r *Runtime) chatDirectory() chat.Directory {
+	if r.cfg.ChatDir != nil {
+		return r.cfg.ChatDir
+	}
+	return chatDir{r}
+}
+
 // chatDir looks up contacts through the DHT client, which exists only after Start.
 type chatDir struct{ r *Runtime }
 
@@ -75,7 +83,7 @@ func (r *Runtime) registerChat() {
 			DeviceKey: r.cfg.Device.Public(),
 		},
 		Crypto: cr,
-		Dir:    chatDir{r},
+		Dir:    r.chatDirectory(),
 		Link: &chat.StreamLink{Open: func(ctx context.Context, device [32]byte) (chat.Stream, error) {
 			_, st, err := r.Open(ctx, DeviceID(device), service.Chat, DialOpt{})
 			if err != nil {

@@ -107,6 +107,7 @@ func (r *Runtime) established(ctx context.Context, peer DeviceID, opt DialOpt) (
 	if err != nil {
 		return nil, Peer{}, err
 	}
+	r.rememberCard(est, card)
 	r.ensureServing(est)
 	return est, r.peerOf(est), nil
 }
@@ -198,7 +199,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		attempt = firstAttempt(attempts)
 		c, chosen, err := carrier.Dial(ctx, req, attempts, dialCfg)
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || opt.repair {
 				r.releaseReservations(reserved)
 			} else {
 				r.failReservations(reserved)
@@ -261,7 +262,7 @@ func (r *Runtime) dial(ctx context.Context, card *objects.Card, local session.Lo
 		r.noteClockSkew(err)
 		r.maybeClockCheck()
 		if havePair {
-			if ctx.Err() == nil && penalizeDial(err) {
+			if ctx.Err() == nil && !opt.repair && penalizeDial(err) {
 				r.policy.Penalize(chosenPair)
 			} else {
 				r.policy.Release(chosenPair)

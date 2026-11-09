@@ -42,7 +42,7 @@ var ErrNoFilesDevice = errors.New("node: no device of the account offers files")
 // OpenFiles opens a files/2 stream to a device of the account behind node: the devices its published
 // cards name are tried in turn. It is what the app fetches a file over (app.FetchOver).
 func (r *Runtime) OpenFiles(ctx context.Context, node [32]byte) (*mux.Stream, error) {
-	res, err := chatDir{r}.Resolve(ctx, node)
+	res, err := r.chatDirectory().Resolve(ctx, node)
 	if err != nil {
 		return nil, err
 	}

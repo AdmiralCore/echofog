@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 
 	"google.golang.org/protobuf/proto"
 
@@ -286,4 +287,37 @@ func exitShape(cfg Config) *shape.Profile {
 		return nil
 	}
 	return p
+}
+
+// ErrNoRemote says the session to the exit carries no address of the other end (an in-memory
+// carrier of a test).
+var ErrNoRemote = errors.New("node: the session to the exit has no remote address")
+
+// ExitRemote makes sure the session to the exit under its client identity is up and returns the
+// address of its first hop: the exit itself, or the relay in the path. The kill switch of the
+// whole-computer mode permits this address and no other (T10.6b).
+func (r *Runtime) ExitRemote(ctx context.Context, card *objects.Card) (netip.AddrPort, error) {
+	if card == nil || card.ExitOffer() == nil {
+		return netip.AddrPort{}, fmt.Errorf("%w: not an exit", ErrPeerCard)
+	}
+	if !r.running() {
+		return netip.AddrPort{}, ErrClosed
+	}
+	dev := DeviceID(card.DeviceID)
+	id, err := r.exitIdentity(ctx, dev)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	local := id.local
+	if _, _, err := r.Session(ctx, dev, DialOpt{Card: card, Local: &local}); err != nil {
+		return netip.AddrPort{}, err
+	}
+	est := r.exitSession(dev, id)
+	if est == nil {
+		return netip.AddrPort{}, ErrNoSession
+	}
+	if !est.Remote.IsValid() {
+		return netip.AddrPort{}, ErrNoRemote
+	}
+	return est.Remote, nil
 }

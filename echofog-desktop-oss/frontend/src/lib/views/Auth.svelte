@@ -144,7 +144,7 @@
     {#if held}
       <div class="killed" role="alert">
         <span class="small">{$t('proxy.killHeld')}</span>
-        <button class="ghost" on:click={unblock}>{$t('proxy.killUnblock')}</button>
+        <button class="killbtn" on:click={unblock}>{$t('proxy.killUnblock')}</button>
       </div>
     {/if}
 
@@ -357,5 +357,7 @@
   .err { animation: shake 0.4s var(--ease); }
   @keyframes shake { 0%, 100% { transform: none; } 25% { transform: translateX(-5px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
   .killed { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid #c98a00; border-radius: 10px; background: color-mix(in srgb, #c98a00 12%, transparent); }
+  .killbtn { background: #c98a00; color: #fff; border-color: #c98a00; font-weight: 600; padding: 8px 14px; flex: none; }
+  .killbtn:hover:not(:disabled) { filter: brightness(1.08); }
 </style>
 

@@ -13,6 +13,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/exit"
 	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/tun"
 )
 
 const (
@@ -184,8 +185,28 @@ func UserMessage(err error) string {
 		return "Сеть уже запущена"
 	case errors.Is(err, ErrNoChat), errors.Is(err, ErrNoGroup), errors.Is(err, convlog.ErrNotParticipant):
 		return "Такого чата нет" // a chat that is not there and one the user is not in read alike
-	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff):
+	case errors.Is(err, ErrChatOff), errors.Is(err, ErrGroupOff), errors.Is(err, ErrNoVoice), errors.Is(err, ErrFilesOff), errors.Is(err, ErrVPNOff), errors.Is(err, ErrExitOff):
 		return "Эта возможность пока недоступна"
+	case errors.Is(err, ErrExitNoEntry):
+		return "Такого клиента нет в списке"
+	case errors.Is(err, ErrExitBadEntry):
+		return "Идентификатор клиента или название указаны неверно"
+	case errors.Is(err, ErrExitFull):
+		return "Подтверждённых клиентов слишком много: ненужных можно удалить"
+	case errors.Is(err, ErrExitNotOn):
+		return "Сначала нужно включить выход"
+	case errors.Is(err, ErrExitBadTTL):
+		return "Нужно указать срок открытого доступа"
+	case errors.Is(err, ErrWholeOff):
+		return "Режим «весь компьютер» недоступен в этой сборке"
+	case errors.Is(err, tun.ErrUnsupported):
+		return "Режим «весь компьютер» на этой системе пока не поддерживается"
+	case errors.Is(err, tun.ErrNoPrivilege):
+		return "Нужны права администратора: подтвердите запрос системы и повторите"
+	case errors.Is(err, ErrWholeStop):
+		return "Не удалось полностью отключить защиту: интернет остаётся заблокированным. Отключение можно повторить"
+	case errors.Is(err, ErrNeedVPN):
+		return "Сначала запустите VPN"
 	case errors.Is(err, ErrNotExit):
 		return "Это не ссылка выхода: узел не раздаёт соединение"
 	case errors.Is(err, ErrVPNRunning):

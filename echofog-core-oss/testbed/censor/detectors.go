@@ -176,7 +176,7 @@ func (fetDetector) Applies(f LabeledFlow) bool {
 	return f.Proto == "tcp"
 }
 func (fetDetector) Truth(f LabeledFlow, _ DetectorConfig) bool {
-	return f.Suite == "tcp-random" || (f.Synthetic && f.Label == LabelCarrier && f.Proto == "tcp")
+	return f.Suite == "tcp-random" || (f.Synthetic && f.Label == LabelCarrier && f.Proto == "tcp" && !isTunnelControl(f))
 }
 func (fetDetector) Flag(f LabeledFlow, _ DetectorConfig) bool { return f.FET }
 

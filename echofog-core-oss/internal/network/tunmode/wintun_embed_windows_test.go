@@ -82,7 +82,7 @@ func TestWintunLoadedByPathIsTheOneLoadedByName(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.FreeLibrary(byPath) // a loaded DLL cannot be deleted with the temp folder
-	const searchAppDir = 0x00000200 // LOAD_LIBRARY_SEARCH_APPLICATION_DIR, as golang.zx2c4.com/wintun uses
+	const searchAppDir = 0x00000200   // LOAD_LIBRARY_SEARCH_APPLICATION_DIR, as golang.zx2c4.com/wintun uses
 	byName, err := windows.LoadLibraryEx("wintun.dll", 0, searchAppDir|windows.LOAD_LIBRARY_SEARCH_SYSTEM32)
 	if err != nil {
 		t.Fatalf("the load by name did not find the loaded driver: %v", err)

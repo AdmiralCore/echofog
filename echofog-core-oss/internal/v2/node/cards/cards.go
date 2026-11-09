@@ -240,6 +240,24 @@ func (b *CardBuilder) Update(cfg Config) error {
 	return b.applyConfig(cfg, false)
 }
 
+// SetExit changes the live exit offer: a source that returns an offer makes the cards carry the exit
+// flag and the offer, nil takes both away. The next Current reissues the affected cards with a higher
+// seq (the desktop turns its exit on and off while it runs).
+func (b *CardBuilder) SetExit(src ExitSource) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if src != nil {
+		if o := src.ExitOffer(); o != nil {
+			if err := validateExitOffer(o); err != nil {
+				return err
+			}
+		}
+	}
+	cfg := cloneConfig(b.cfg)
+	cfg.Exit = src
+	return b.applyConfig(cfg, false)
+}
+
 // ReplaceMask changes every listener that uses old as its masking key to next and returns the
 // number of listeners changed. The runtime calls it when the contacts key rotates (T3.6b): the
 // next Current reissues the affected cards with the new key.

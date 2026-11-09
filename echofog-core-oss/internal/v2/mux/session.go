@@ -222,6 +222,7 @@ type Session struct {
 	goAwayAt     time.Time
 	goingAway    bool
 	noPathSince  time.Time
+	onFailing    atomic.Pointer[func(PathFailure)]
 	// idle padding of the active path (wire.md §6.4, §9): the gap drawn from the shape policy
 	// and the instant the next padding-only frame is due.
 	idlePadGap time.Duration
@@ -1149,7 +1150,7 @@ func (s *Session) tick(now time.Time) {
 		if silent >= tm.PathDead {
 			// Dead: abandoned (PATH_ABANDON on another path when there is one).
 			if s.AbandonPath(p.id, frame.CodeTimeout) != nil {
-				s.failPath(p, fmt.Errorf("%w: no authenticated traffic for %v", ErrPathFailed, tm.PathDead))
+				s.failPath(p, fmt.Errorf("%w: %w: no authenticated traffic for %v", ErrPathFailed, ErrPathSilent, tm.PathDead))
 			}
 			continue
 		}
@@ -1164,11 +1165,16 @@ func (s *Session) tick(now time.Time) {
 		}
 		outstanding := pinging || lastSend.After(last)
 		probe := false
+		var report *PathFailure
 		switch {
 		case p == active && !p.failing && (overdue || (outstanding && silent >= tm.FailSilence)):
 			p.failing, p.failingSince = true, now
 			if next := s.pickActiveLocked(); next != nil {
 				s.active = next
+			}
+			if !s.healthyPathLocked() {
+				report = &PathFailure{SID: s.sid, PathID: p.id, Kind: p.kind,
+					Cause: fmt.Errorf("%w: no authenticated traffic for %v with data outstanding", ErrPathFailed, silent.Round(time.Millisecond))}
 			}
 		case p.failing && last.After(p.failingSince):
 			p.failing = false // recovered; it stays a standby path
@@ -1186,6 +1192,11 @@ func (s *Session) tick(now time.Time) {
 			probe = true
 		}
 		s.mu.Unlock()
+		if report != nil {
+			if h := s.onFailing.Load(); h != nil {
+				(*h)(*report)
+			}
+		}
 		if probe {
 			go func(p *path) {
 				ctx, cancel := context.WithTimeout(context.Background(), tm.PathDead)
@@ -1345,4 +1356,33 @@ func (s *Session) pickKindLocked(kind PathKind) *path {
 		}
 	}
 	return best
+}
+
+// healthyPathLocked reports whether some path is neither dead nor failing.
+func (s *Session) healthyPathLocked() bool {
+	for _, p := range s.paths {
+		if !p.isDead() && !p.failing {
+			return true
+		}
+	}
+	return false
+}
+
+// SetOnPathFailing registers f, called (without session locks, and it must not block) when the
+// active path is declared failing and no healthy path can take over: the session is about to be
+// left without a working path. It is called once per episode; a path that recovers and fails
+// again is reported again.
+func (s *Session) SetOnPathFailing(f func(PathFailure)) {
+	if f == nil {
+		s.onFailing.Store(nil)
+		return
+	}
+	s.onFailing.Store(&f)
+}
+
+// Healthy reports whether some path is neither failing nor dead.
+func (s *Session) Healthy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.healthyPathLocked()
 }
