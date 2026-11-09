@@ -94,7 +94,7 @@ func openApp(ctx context.Context, dataDir string, listeners []listenSpec, log *s
 	}
 	a.store = st
 
-	clk, err := clock.New(clock.Config{})
+	clk, err := clock.New(clock.StartupConfig(nil, 30*time.Second))
 	if err != nil {
 		return nil, err
 	}

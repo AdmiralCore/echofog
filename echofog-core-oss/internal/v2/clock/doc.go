@@ -30,10 +30,11 @@
 // is the median of the majority cluster.
 //
 // The endpoint list is configuration: DefaultEndpoints returns the registries.md §12
-// list, and users or distributions may replace it. The HTTP client is injected, because
-// requests must use browser-shaped TLS and, in anonymous mode, the node's proxy; this
-// package never builds a transport of its own. *http.Client satisfies HTTPClient, and
-// NewHTTPClient builds a plain client for environments that do not have a node.Host yet.
+// list, and users or distributions may replace it. The HTTP client is injected through
+// Config.HTTP. NewHTTPClient and StartupConfig build the production client: uTLS with the
+// Chrome ClientHello and, in anonymous mode, the node's SOCKS5 proxy (T11.6a). The
+// products (efv2, the desktop facade, mobile, the server node) pass that client at start,
+// so the CDN check is not left off with ErrNoHTTPClient (D36, PA-FIX-4).
 //
 // When the applied offset exceeds 60 s the clock reports a user-facing warning through
 // Config.Warn. A large offset warns once; the warning is re-armed after the offset comes

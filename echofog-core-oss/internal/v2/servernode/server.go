@@ -578,7 +578,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 		return nil, fmt.Errorf("open the v2 store: %w", err)
 	}
 	s.store = st
-	clk, err := clock.New(clock.Config{})
+	clk, err := clock.New(clock.StartupConfig(nil, 30*time.Second))
 	if err != nil {
 		return nil, err
 	}
