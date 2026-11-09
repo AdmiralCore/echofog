@@ -46,7 +46,14 @@ func ParseKey(s string) (keys.AKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		return keys.ParseKind(k, keys.Ed25519)
+		k, err = keys.ParseKind(k, keys.Ed25519)
+		if err != nil {
+			return nil, err
+		}
+		if err := keys.CheckEd25519Public(k.Key()); err != nil {
+			return nil, err
+		}
+		return k, nil
 	}
 	raw, err := decode(s)
 	if err != nil {
