@@ -246,8 +246,10 @@ const tick = 5 * time.Millisecond
 // run is the pacing loop shared by the three modes. It calls send for every datagram that is due
 // (the schedule is fixed from the start, so a late wake-up is absorbed by sending the backlog; the
 // rate carries a jitter of up to 3 %) and poll for a hit, until a hit, the end of the window or the
-// budget, or ctx ends. send reports false when the mode has nothing more to send.
-func (b *Birthday) run(ctx context.Context, send func(i int) bool, poll func() (Hit, bool)) (Hit, error) {
+// budget, or ctx ends. send reports false when the mode has nothing more to send. budget is the most
+// datagrams the mode may send in all, including the answer it sends after run: a mode that answers
+// passes one less than MaxPunchPackets.
+func (b *Birthday) run(ctx context.Context, budget int, send func(i int) bool, poll func() (Hit, bool)) (Hit, error) {
 	clk := b.cfg.Clock
 	start := clk.Now()
 	expired := make(chan struct{})
@@ -269,11 +271,11 @@ func (b *Birthday) run(ctx context.Context, send func(i int) bool, poll func() (
 		if more {
 			rate := float64(PunchRate) * (1 + float64(b.cfg.Rand(61)-30)/1000)
 			due := int(clk.Now().Sub(start).Seconds()*rate) + 1
-			for sent < due && sent < MaxPunchPackets && more {
+			for sent < due && sent < budget && more {
 				more = send(sent)
 				sent++
 			}
-			if sent >= MaxPunchPackets {
+			if sent >= budget {
 				more = false
 			}
 		}
@@ -310,7 +312,12 @@ func (b *Birthday) Dial(ctx context.Context, cone netip.AddrPort, reply bool) (H
 	if len(socks) == 0 {
 		return Hit{}, ErrNoSocket
 	}
-	h, err := b.run(ctx,
+	// The answer junk below is one of the MaxPunchPackets: leave its slot in the budget.
+	budget := MaxPunchPackets
+	if reply {
+		budget--
+	}
+	h, err := b.run(ctx, budget,
 		func(i int) bool { _ = socks[i%len(socks)].Send(cone, b.junk()); return true },
 		func() (Hit, bool) {
 			for _, s := range socks {
@@ -341,7 +348,7 @@ func (b *Birthday) Spray(ctx context.Context, ip netip.Addr, lo, hi uint16) (Hit
 	l := b.cfg.Net.Listener()
 	ports := b.sprayPorts(lo, hi, MaxSprayPackets)
 	ip = ip.Unmap()
-	return b.run(ctx,
+	return b.run(ctx, MaxPunchPackets,
 		func(i int) bool {
 			_ = l.Send(netip.AddrPortFrom(ip, ports[i]), b.junk())
 			return i+1 < len(ports)
@@ -381,7 +388,8 @@ func (b *Birthday) Mutual(ctx context.Context, ip netip.Addr, lo, hi uint16) (Hi
 	for i := range targets {
 		targets[i] = netip.AddrPortFrom(ip, uint16(int64(lo)+b.cfg.Rand(span)))
 	}
-	h, err := b.run(ctx,
+	// The answer junk below is one of the MaxPunchPackets: leave its slot in the budget.
+	h, err := b.run(ctx, MaxPunchPackets-1,
 		func(i int) bool { _ = socks[i%len(socks)].Send(targets[i%len(socks)], b.junk()); return true },
 		func() (Hit, bool) {
 			for i, s := range socks {
