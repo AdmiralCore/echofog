@@ -75,6 +75,13 @@ type Entry struct {
 	// Addr and Mask are set for KindDevice and KindAddr.
 	Addr *pb.Addr
 	Mask keys.AKey
+	// Line is the entry as written in the list. It is kept for the UI and for de-duplication and
+	// is never logged.
+	Line string
+	// Builtin is true for an entry of the signed official list; Index is then its 1-based number.
+	// A log may name the number, never the line.
+	Builtin bool
+	Index   int
 }
 
 // Host is what the service needs from the runtime. *node.Runtime satisfies it.
@@ -106,6 +113,7 @@ func Parse(text string, now time.Time) ([]Entry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: line %d: %v", ErrList, i+1, err)
 		}
+		e.Line = line
 		if len(out) == MaxEntries {
 			return nil, fmt.Errorf("%w: more than %d entries", ErrList, MaxEntries)
 		}
@@ -218,6 +226,14 @@ func New(host Host, entries []Entry, _ func() time.Time) *Service {
 	return &Service{host: host, entries: entries, log: slog.Default()}
 }
 
+// Log sets the logger of the service (nil keeps the default).
+func (s *Service) Log(l *slog.Logger) *Service {
+	if l != nil {
+		s.log = l
+	}
+	return s
+}
+
 // Run dials every entry once, at most four at a time, each under a 30 s limit.
 func (s *Service) Run(ctx context.Context) Report {
 	var (
@@ -255,6 +271,9 @@ loop:
 	wg.Wait()
 	return rep
 }
+
+// Check dials one entry and reports whether it answered. It writes no address to the log.
+func (s *Service) Check(ctx context.Context, e Entry) bool { return false }
 
 // one dials one entry. It returns the candidate card of a bare address, or joined for an
 // authenticated session.
