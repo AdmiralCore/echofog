@@ -12,6 +12,8 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite the golden screens of the setup")
@@ -118,6 +120,8 @@ func TestSetupScreensGolden(t *testing.T) {
 }
 
 func key(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+
+func lipglossWidth(s string) int { return lipgloss.Width(s) }
 
 func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
@@ -238,5 +242,26 @@ func TestSetupCancelChangesNothing(t *testing.T) {
 	m.Update(key(tea.KeyEsc))
 	if !m.cancelled {
 		t.Fatal("Esc on the welcome screen did not cancel")
+	}
+}
+
+// The colour mode renders through lipgloss at every width and still fits the terminal.
+func TestSetupColorScreenFits(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	for _, width := range []int{60, 80, 120} {
+		m := testModel("ru", width)
+		m.color = true
+		m.scr = scrPreset
+		out := m.View()
+		if !strings.Contains(out, "\x1b[") {
+			t.Errorf("%d: the colour mode printed no escape sequence", width)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if w := lipglossWidth(line); w > width {
+				t.Errorf("%d: a line of %d cells: %q", width, w, line)
+			}
+		}
 	}
 }
