@@ -173,7 +173,11 @@ Yes.
 ## What does the app log and keep?
 
 - **Your profile** lives in the `.echofog/profiles` folder in your home folder. Messages, contacts,
-  groups, keys and settings are stored encrypted with a key unlocked by your password.
+  groups and keys are stored encrypted with a key unlocked by your password.
+- **Interface settings** are kept in `ui_settings.json` next to the database as ordinary JSON that
+  only your user can read: anonymous mode, proxy, pinned guard relays, bootstrap nodes, the kill
+  switch, the access mode, relay settings, the call route and the protocol. The file carries no
+  message text, names, keys or tokens, but it shows how the app was set up and where it connects.
 - **Files you receive** are written as ordinary files to the download folder (`Downloads/EchoFog`
   unless you chose another). They are not encrypted: the system file viewer, previews, indexing,
   the Recycle Bin, backups and anyone who can read the folder can see them. A file you save from
@@ -181,8 +185,9 @@ Yes.
 - **Logs** go to `echofog.log` in the app's cache folder (on Windows,
   `%LOCALAPPDATA%\EchoFog`). The file is capped at 8 MB, plus one previous file. They are plain
   text: passwords, keys and the recovery phrase are blanked out, IP addresses are masked and
-  identifiers are shortened. They hold technical events, not the text of messages or contact and
-  group names. Check a log before you share it.
+  identifiers are shortened in most lines (a rare storage or group error can include a full device
+  or group identifier, and a failed connection error can include a host name). They hold technical
+  events, not the text of messages or contact and group names. Check a log before you share it.
 - **`crash.log`** next to the log is plain text too: a technical crash trace, not your messages.
 - **Emergency lock** (in *Settings*: type `LOCK`, then press *Lock now*) erases the decrypted keys
   from memory at once, stops the node and the VPN and closes the app, so no key or open message

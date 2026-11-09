@@ -142,8 +142,8 @@ What EchoFog tries to protect:
 - **The protocol, from passive observers.** Someone watching your connection to an exit should see
   what looks like a browser opening an ordinary site over HTTP/3 or HTTPS. A probe that connects to a
   camouflage node without the right token sees the real site that node imitates.
-- **The data in the app's database.** Messages, contacts, groups, keys and settings are stored
-  encrypted and open only with your password or recovery phrase. The exception is *Remember on this
+- **The data in the app's database.** Messages, contacts, groups and keys are stored encrypted
+  and open only with your password or recovery phrase. The exception is *Remember on this
   computer* (Windows): then the key is sealed for your Windows account, and anyone who can use that
   account, or any program running in it, can open the profile and read your messages. Payments still
   ask the password unless you switch that off.
@@ -163,11 +163,17 @@ What it does **not** protect:
   system file viewer, thumbnails and previews, search indexing, the Recycle Bin and backups can see
   it, and so can anyone who can read that folder. A file you save from the app goes wherever you
   choose and is not encrypted either.
+- **Interface settings.** The app keeps its connection settings in `ui_settings.json` next to the
+  database as ordinary JSON (file mode 0600): anonymous mode, the proxy, pinned guard relays,
+  bootstrap nodes, the kill switch, the access mode, relay settings, the call route, privacy rules
+  and the protocol. The file holds no message text, contact or group names, keys or tokens, but it
+  shows how the app was configured and which relays and nodes it was told to use.
 - **Logs and `crash.log`.** Both are plain text. The app log keeps technical events — errors,
-  state changes, counts — and shortened identifiers; it does not keep the text of messages,
-  contact or group names, keys, tokens, the recovery phrase or network addresses, and IP
-  addresses are masked. `crash.log` keeps a technical crash trace. They stay on your computer
-  unless you copy or send them.
+  state changes, counts — and shortened identifiers; a rare storage or group error path can write a
+  full device or group identifier, and a host name from a failed connection can stay in the error
+  text. It does not keep the text of messages, contact or group names, keys, tokens or the recovery
+  phrase. IP addresses are masked. `crash.log` keeps a technical crash trace. They stay on your
+  computer unless you copy or send them.
 - **The v1 wallet, if you have one.** Signed payment vouchers are kept in
   `ton/vouchers-signed.json` next to the database as plain text. It holds no recovery phrase or
   private key, but it shows which exits you paid and how much.
@@ -343,7 +349,7 @@ EchoFog — **экспериментальный** проект.
   должен видеть то, что похоже на браузер, открывающий обычный сайт по HTTP/3 или HTTPS. Зонд,
   который подключается к ноде с маскировкой без правильного токена, видит настоящий сайт, под
   который она маскируется.
-- **Данные в базе приложения.** Сообщения, контакты, группы, ключи и настройки хранятся
+- **Данные в базе приложения.** Сообщения, контакты, группы и ключи хранятся
   зашифрованными и открываются только паролем или фразой восстановления. Исключение —
   *Запомнить на этом компьютере* (Windows): тогда ключ защищён вашей учётной записью Windows, и
   профиль откроет и сообщения прочитает любой, у кого есть доступ к этой учётной записи, или любая
@@ -364,11 +370,18 @@ EchoFog — **экспериментальный** проект.
   видят системный просмотрщик, эскизы и превью, поисковый индекс, корзина и резервные копии, а
   также любой, у кого есть доступ к этой папке. Файл, сохранённый из приложения, ложится туда,
   куда вы указали, и тоже не шифруется.
+- **Настройки интерфейса.** Настройки подключения приложение хранит в `ui_settings.json` рядом с
+  базой как обычный JSON (права файла 0600): анонимный режим, прокси, закреплённые релеи охраны,
+  bootstrap-узлы, kill switch, режим доступа, настройки релея, маршрут звонков, правила приватности
+  и протокол. Текста сообщений, имён контактов и групп, ключей и токенов в файле нет, но он
+  показывает, как приложение было настроено и на какие релеи и узлы ему велели ходить.
 - **Журналы и `crash.log`.** Оба файла — открытый текст. В журнале приложения технические
-  события (ошибки, смена состояния, счётчики) и укороченные идентификаторы, но нет текста
-  сообщений, имён контактов и групп, ключей, токенов, фразы восстановления и сетевых адресов;
-  IP-адреса замаскированы. `crash.log` хранит технический след падения. Оба файла остаются на
-  вашем компьютере, если вы сами их не скопируете и не отправите.
+  события (ошибки, смена состояния, счётчики); идентификаторы в нём укорачиваются, но в редком
+  пути ошибки хранилища или группы может оказаться полный ID устройства или группы, а в тексте
+  ошибки неудачного подключения — имя хоста. Текста сообщений, имён контактов и групп, ключей,
+  токенов и фразы восстановления в журнале нет. IP-адреса замаскированы. `crash.log` хранит
+  технический след падения. Оба файла остаются на вашем компьютере, если вы сами их не скопируете
+  и не отправите.
 - **Кошелёк v1, если он есть.** Подписанные платёжные чеки лежат в `ton/vouchers-signed.json`
   рядом с базой как открытый текст. Фразы восстановления и закрытого ключа там нет, но видно,
   каким выходам и сколько вы заплатили.
