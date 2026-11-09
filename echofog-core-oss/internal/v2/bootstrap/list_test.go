@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -270,6 +272,36 @@ func TestManagerOfferRollbackForgeryExpiry(t *testing.T) {
 	}
 	if err := m2.Offer(old); !errors.Is(err, bootstrap.ErrListStale) {
 		t.Fatalf("rollback after restart: %v", err)
+	}
+}
+
+func TestManagerOfferFile(t *testing.T) {
+	m, s := newManager(t, newMemKV())
+	path := filepath.Join(t.TempDir(), "bootstrap-update.bin")
+	raw, err := bootstrap.SealList(s, 12, uint64(testNow.Add(24*time.Hour).Unix()), listA+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := m.OfferFile(path)
+	if err != nil || !ok || m.Seq() != 12 {
+		t.Fatalf("offer file: ok %v err %v seq %d", ok, err, m.Seq())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the accepted update file was not removed: %v", err)
+	}
+	// A file that is not signed stays where it is: the refusal is not silent.
+	bad := filepath.Join(t.TempDir(), "bootstrap-update.bin")
+	if err := os.WriteFile(bad, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.OfferFile(bad); err == nil {
+		t.Fatal("an unsigned update was accepted")
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Fatalf("the refused update was removed: %v", err)
 	}
 }
 
