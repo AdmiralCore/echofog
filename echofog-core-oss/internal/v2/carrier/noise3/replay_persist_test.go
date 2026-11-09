@@ -61,6 +61,72 @@ func TestReplayDirtyHeldUntilPutSucceeds(t *testing.T) {
 	}
 }
 
+// gatedKV blocks the first PutTTL until the test releases it, which opens the window between
+// the snapshot in persistLocked and the write to KV.
+type gatedKV struct {
+	*mapKV
+	gate    chan struct{}
+	blocked chan struct{}
+	once    sync.Once
+}
+
+func newGatedKV() *gatedKV {
+	return &gatedKV{mapKV: newMapKV(), gate: make(chan struct{}), blocked: make(chan struct{})}
+}
+
+func (k *gatedKV) PutTTL(key, value []byte, ttl time.Duration) error {
+	k.once.Do(func() {
+		close(k.blocked)
+		<-k.gate
+	})
+	return k.mapKV.PutTTL(key, value, ttl)
+}
+
+func (k *gatedKV) release() { close(k.gate) }
+
+// TestReplayDirtyResetIsVersioned reproduces F1 of the PA-FIX-2b acceptance: a concurrent seen
+// during the KV write must not be swallowed by clearing dirty after PutTTL returns. The
+// generation is dirtied in the window, so it stays dirty and the next flush writes it; the
+// selector then survives a restart.
+func TestReplayDirtyResetIsVersioned(t *testing.T) {
+	kv := newGatedKV()
+	t0 := time.Unix(95_000, 0)
+	c := newReplayCache(kv, t0, nil)
+	first := selFor("persist-window-first")
+	if c.seen(first, t0) {
+		t.Fatal("a fresh selector is reported as a replay")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		c.flush(t0) // blocks inside the first PutTTL, with r.mu released
+		close(done)
+	}()
+	<-kv.blocked
+
+	// A concurrent seen (readLoop) in the window touches the same generation.
+	second := selFor("persist-window-second")
+	if c.seen(second, t0) {
+		t.Fatal("a fresh selector is reported as a replay")
+	}
+
+	kv.release()
+	<-done
+
+	if !c.set.anyDirty() {
+		t.Fatal("dirty was cleared although the generation changed during PutTTL")
+	}
+	c.flush(t0)
+	if c.set.anyDirty() {
+		t.Fatal("dirty was not cleared after the retry flush")
+	}
+
+	restarted := newReplayCache(kv.mapKV, t0, nil)
+	if !restarted.seen(second, t0) {
+		t.Fatal("selector added during PutTTL was lost across a restart")
+	}
+}
+
 // TestReplayPersistErrorIsReported checks that a failed write reaches the journal hook.
 func TestReplayPersistErrorIsReported(t *testing.T) {
 	kv := &failingKV{mapKV: newMapKV(), failing: true}
