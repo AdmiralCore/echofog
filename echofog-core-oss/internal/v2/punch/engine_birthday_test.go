@@ -223,12 +223,15 @@ func TestDialInitAfterHitBoundedBySpec(t *testing.T) {
 	spoofFromPeer(peer, r.own)
 	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return bn.initCalls() > 0 })
 	advanceUntil(t, r.clk, 5*time.Millisecond, 4000, func() bool { return bn.initDone() > 0 })
+	// The spec's 3 s stands on its own: widening the deadline (or going back to 5 s) must go red
+	// whatever the constant says, so the test does not compare against InitAfterHit.
+	const specDeadline = 3 * time.Second
 	_, took := bn.firstInit()
-	if took > InitAfterHit {
-		t.Fatalf("Init after a false hit ran %v, the deadline is %v", took, InitAfterHit)
+	if took > specDeadline {
+		t.Fatalf("Init after a false hit ran %v, the spec deadline is %v", took, specDeadline)
 	}
-	if took < InitAfterHit {
-		t.Fatalf("Init after a false hit ended after %v, want the full %v", took, InitAfterHit)
+	if took < specDeadline {
+		t.Fatalf("Init after a false hit ended after %v, want the full %v", took, specDeadline)
 	}
 	cancel()
 	select {
