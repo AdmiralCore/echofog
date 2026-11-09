@@ -13,7 +13,6 @@ import (
 // RenderStatusPanel is the operator panel of `v2 status`: one screen, no secrets, no traffic to
 // outside services unless the caller already asked for an update check.
 func RenderStatusPanel(st StatusInfo, upd *UpdateInfo, updateErr error, lang string, width int, color bool) string {
-	return ""
 	if width < 40 {
 		width = 40
 	}

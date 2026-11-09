@@ -193,7 +193,6 @@ type SystemCheckDeps struct {
 // RunSystemChecks checks the machine before the questions: it is what the operator must fix first.
 // It reuses the doctor's levels and messages and adds the host checks the doctor does not do.
 func RunSystemChecks(d SystemCheckDeps) []CheckResult {
-	return nil
 	euid := os.Geteuid
 	if d.Euid != nil {
 		euid = d.Euid
@@ -363,7 +362,6 @@ var netInterfaceAddrs = net.InterfaceAddrs
 // cmdSetup is `echofog-node v2 setup`: the TUI installer and its plain form. Nothing is written
 // before the summary is confirmed.
 func cmdSetup(args []string, env func(string) string, stdin io.Reader, out, errw io.Writer) error {
-	return errors.New("servernode: setup is not implemented yet")
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	root := fs.String("root", "", "install below this folder (image builds and tests)")
 	binary := fs.String("binary", "", "the verified node binary (default: this executable)")

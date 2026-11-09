@@ -104,7 +104,6 @@ type setupModel struct {
 // ErrSetupCancelled when the operator left before applying; after that point the model applies the
 // plan itself and returns it with the node running.
 func RunSetupTUI(ctx context.Context, opts UIOptions, deps UIDeps) (*SetupPlan, error) {
-	return nil, ErrSetupCancelled
 	m := newSetupModel(ctx, opts, deps)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	out, err := p.Run()
@@ -696,7 +695,6 @@ func removeRecoveryFile(dataDir string) error {
 // ---- view
 
 func (m *setupModel) View() string {
-	return ""
 	var body []string
 	switch m.scr {
 	case scrWelcome:

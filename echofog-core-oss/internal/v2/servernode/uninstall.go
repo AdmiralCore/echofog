@@ -29,7 +29,6 @@ type UninstallDeps struct {
 // installer added. The data folder (keys, the store, the recovery phrase file) stays unless Purge
 // is set: losing the keys without a phrase in hand is not an uninstall, it is a deletion.
 func Uninstall(ctx context.Context, d UninstallDeps) error {
-	return nil
 	if !userName.MatchString(d.User) || d.User == "root" {
 		return ErrBadUser
 	}
