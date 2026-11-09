@@ -85,6 +85,9 @@
       <button class="ghost small with-icon" on:click={() => showInFolder(file.fid)}><Icon name="folder" size={14} /> {$t('files.showInFolder')}</button>
     {/if}
   </div>
+  {#if !mine && !groupFile && (state === 'offered' || state === 'done')}
+    <span class="note">{$t('files.saveHint')}</span>
+  {/if}
 </div>
 
 <style>

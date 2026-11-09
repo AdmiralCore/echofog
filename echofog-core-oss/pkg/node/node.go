@@ -260,7 +260,7 @@ func (n *Node) Register(appPassword []byte, mnemonicPassphrase []byte) (string, 
 		return "", fmt.Errorf("failed to save identity: %w", err)
 	}
 
-	if err = idMgr.Load(appPassword, false); err != nil {
+	if err = idMgr.Load(appPassword); err != nil {
 		return "", fmt.Errorf("failed to load identity: %w", err)
 	}
 
@@ -287,7 +287,7 @@ func (n *Node) Login(appPassword []byte) error {
 	}
 
 	idMgr := identity.NewProtectedIdentity(n.Storage)
-	err := idMgr.Load(appPassword, false)
+	err := idMgr.Load(appPassword)
 	if err != nil {
 		// release the database: the next attempt (a fresh node, with the right password) must be
 		// able to open it, or one typo locks the user out until the app restarts
@@ -315,7 +315,7 @@ func (n *Node) VerifyPassword(appPassword []byte) error {
 		return errors.New("node is not logged in")
 	}
 	probe := identity.NewProtectedIdentity(n.Storage)
-	if err := probe.Load(appPassword, false); err != nil {
+	if err := probe.Load(appPassword); err != nil {
 		return ErrWrongPassword
 	}
 	return nil
@@ -342,7 +342,7 @@ func VerifyProfilePassword(cfg *config.AppConfig, appPassword []byte) error {
 		}
 	}()
 	idMgr := identity.NewProtectedIdentity(n.Storage)
-	if err := idMgr.Load(appPassword, false); err != nil {
+	if err := idMgr.Load(appPassword); err != nil {
 		return ErrWrongPassword
 	}
 	return nil
@@ -370,7 +370,7 @@ func (n *Node) Recover(mnemonic string, mnemonicPassphrase []byte, newAppPasswor
 		return fmt.Errorf("failed to save recovered identity: %w", err)
 	}
 
-	if err = idMgr.Load(newAppPassword, false); err != nil {
+	if err = idMgr.Load(newAppPassword); err != nil {
 		return fmt.Errorf("failed to load identity after recovery: %w", err)
 	}
 

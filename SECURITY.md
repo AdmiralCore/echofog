@@ -142,10 +142,11 @@ What EchoFog tries to protect:
 - **The protocol, from passive observers.** Someone watching your connection to an exit should see
   what looks like a browser opening an ordinary site over HTTP/3 or HTTPS. A probe that connects to a
   camouflage node without the right token sees the real site that node imitates.
-- **Data on your disk.** It is encrypted and opens only with your password or recovery phrase.
-  The exception is *Remember on this computer* (Windows): then the key is sealed for your Windows
-  account, and anyone who can use that account, or any program running in it, can open the
-  profile and read your messages. Payments still ask the password unless you switch that off.
+- **The data in the app's database.** Messages, contacts, groups, keys and settings are stored
+  encrypted and open only with your password or recovery phrase. The exception is *Remember on this
+  computer* (Windows): then the key is sealed for your Windows account, and anyone who can use that
+  account, or any program running in it, can open the profile and read your messages. Payments still
+  ask the password unless you switch that off.
 
 What it does **not** protect:
 
@@ -157,7 +158,27 @@ What it does **not** protect:
   through Tor or use anonymous mode.
 - **Payment metadata on TON.** The blockchain is public. Your vault, your deposits and the vouchers
   an exit collects are visible on-chain and can link your vault to the exits you paid.
+- **Files you receive or save.** A received file is written as an ordinary file to the app's
+  download folder (`App.DownloadDir()`, normally `Downloads/EchoFog`). It is not encrypted. The
+  system file viewer, thumbnails and previews, search indexing, the Recycle Bin and backups can see
+  it, and so can anyone who can read that folder. A file you save from the app goes wherever you
+  choose and is not encrypted either.
+- **Logs and `crash.log`.** Both are plain text. The app log keeps technical events — errors,
+  state changes, counts — and shortened identifiers; it does not keep the text of messages,
+  contact or group names, keys, tokens, the recovery phrase or network addresses, and IP
+  addresses are masked. `crash.log` keeps a technical crash trace. They stay on your computer
+  unless you copy or send them.
+- **The v1 wallet, if you have one.** Signed payment vouchers are kept in
+  `ton/vouchers-signed.json` next to the database as plain text. It holds no recovery phrase or
+  private key, but it shows which exits you paid and how much.
+- **Screenshots and screen recording.** EchoFog does not stop the system or other programs from
+  capturing its window, and a camera can photograph the screen.
 - **A compromised computer.** If someone controls your device, they can read what you read.
+
+**Emergency lock is a lock, not a wipe.** It erases the decrypted keys from memory, stops the node
+and the VPN and closes the app. Everything already on disk stays: the encrypted database, received
+and saved files, logs, `crash.log` and the wallet file. The profile opens again with your password
+or recovery phrase.
 
 ## Reporting a vulnerability
 
@@ -322,11 +343,11 @@ EchoFog — **экспериментальный** проект.
   должен видеть то, что похоже на браузер, открывающий обычный сайт по HTTP/3 или HTTPS. Зонд,
   который подключается к ноде с маскировкой без правильного токена, видит настоящий сайт, под
   который она маскируется.
-- **Данные на диске.** Они зашифрованы и открываются только паролем или фразой восстановления.
-  Исключение — *Запомнить на этом компьютере* (Windows): тогда ключ защищён вашей учётной записью
-  Windows, и профиль откроет и сообщения прочитает любой, у кого есть доступ к этой учётной записи,
-  или любая программа, запущенная в ней. Платежи по-прежнему спрашивают пароль, если вы это не
-  выключили.
+- **Данные в базе приложения.** Сообщения, контакты, группы, ключи и настройки хранятся
+  зашифрованными и открываются только паролем или фразой восстановления. Исключение —
+  *Запомнить на этом компьютере* (Windows): тогда ключ защищён вашей учётной записью Windows, и
+  профиль откроет и сообщения прочитает любой, у кого есть доступ к этой учётной записи, или любая
+  программа, запущенная в ней. Платежи по-прежнему спрашивают пароль, если вы это не выключили.
 
 Что он **не** защищает:
 
@@ -338,8 +359,28 @@ EchoFog — **экспериментальный** проект.
   IP-адрес, если вы не идёте через Tor и не включили анонимный режим.
 - **Метаданные платежей в TON.** Блокчейн публичный. Ваше хранилище, депозиты и чеки, которые
   собирает выходной узел, видны в сети и могут связать ваше хранилище с узлами, которым вы платили.
+- **Полученные и сохранённые файлы.** Полученный файл записывается обычным файлом в папку
+  загрузок приложения (`App.DownloadDir()`, обычно `Downloads/EchoFog`). Он не зашифрован: его
+  видят системный просмотрщик, эскизы и превью, поисковый индекс, корзина и резервные копии, а
+  также любой, у кого есть доступ к этой папке. Файл, сохранённый из приложения, ложится туда,
+  куда вы указали, и тоже не шифруется.
+- **Журналы и `crash.log`.** Оба файла — открытый текст. В журнале приложения технические
+  события (ошибки, смена состояния, счётчики) и укороченные идентификаторы, но нет текста
+  сообщений, имён контактов и групп, ключей, токенов, фразы восстановления и сетевых адресов;
+  IP-адреса замаскированы. `crash.log` хранит технический след падения. Оба файла остаются на
+  вашем компьютере, если вы сами их не скопируете и не отправите.
+- **Кошелёк v1, если он есть.** Подписанные платёжные чеки лежат в `ton/vouchers-signed.json`
+  рядом с базой как открытый текст. Фразы восстановления и закрытого ключа там нет, но видно,
+  каким выходам и сколько вы заплатили.
+- **Скриншоты и запись экрана.** EchoFog не мешает системе и другим программам снимать своё окно,
+  а экран можно сфотографировать камерой.
 - **Взломанный компьютер.** Если кто-то управляет вашим устройством, он прочитает всё, что читаете
   вы.
+
+**Экстренная блокировка — это блокировка, а не стирание.** Она стирает расшифрованные ключи из
+памяти, останавливает ноду и VPN и закрывает приложение. Всё, что уже есть на диске, остаётся:
+зашифрованная база, полученные и сохранённые файлы, журналы, `crash.log` и файл кошелька. Профиль
+снова откроется вашим паролем или фразой восстановления.
 
 ### Как сообщить об уязвимости
 

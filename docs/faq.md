@@ -94,7 +94,7 @@ Some protection is built in. Every exit, public or hidden, refuses to connect to
 
 Everything else goes through. A public exit is published to the network so others can find it; a
 hidden one is not, and serves only the people you give a link to (see
-[Hidden and isolated nodes](hidden-nodes.md)). Your own log can contain addresses that failed to connect. More in [run-a-node.md](run-a-node.md).
+[Hidden and isolated nodes](hidden-nodes.md)). Your own log can contain technical errors from connections that failed, with IP addresses masked. More in [run-a-node.md](run-a-node.md).
 
 ## Can someone overload or attack my node?
 
@@ -173,14 +173,23 @@ Yes.
 ## What does the app log and keep?
 
 - **Your profile** lives in the `.echofog/profiles` folder in your home folder. Messages, contacts,
-  groups and other personal data are stored encrypted with a key unlocked by your password.
+  groups, keys and settings are stored encrypted with a key unlocked by your password.
+- **Files you receive** are written as ordinary files to the download folder (`Downloads/EchoFog`
+  unless you chose another). They are not encrypted: the system file viewer, previews, indexing,
+  the Recycle Bin, backups and anyone who can read the folder can see them. A file you save from
+  the app goes wherever you choose and is not encrypted either.
 - **Logs** go to `echofog.log` in the app's cache folder (on Windows,
-  `%LOCALAPPDATA%\EchoFog`). The file is capped at 8 MB, plus one previous file. Passwords, keys
-  and the recovery phrase are blanked out and IP addresses are masked, but node IDs, sites you
-  checked and contact names can stay. Check a log before you share it.
+  `%LOCALAPPDATA%\EchoFog`). The file is capped at 8 MB, plus one previous file. They are plain
+  text: passwords, keys and the recovery phrase are blanked out, IP addresses are masked and
+  identifiers are shortened. They hold technical events, not the text of messages or contact and
+  group names. Check a log before you share it.
+- **`crash.log`** next to the log is plain text too: a technical crash trace, not your messages.
 - **Emergency lock** (in *Settings*: type `LOCK`, then press *Lock now*) erases the decrypted keys
   from memory at once, stops the node and the VPN and closes the app, so no key or open message
-  stays in it. Everything on disk stays encrypted.
+  stays in it. It is a lock, not a wipe: everything already on disk stays, including received
+  files, logs, `crash.log` and the wallet file. The profile opens again with your password or
+  recovery phrase.
+- **Screenshots and screen recording** are not blocked by the app.
 - **The wallet asks before larger sends**, and small sends add up: see
   [Getting started](getting-started.md#4-paying-for-traffic).
 - There is no analytics or crash reporting, and the app does not upload logs. Logs leave your

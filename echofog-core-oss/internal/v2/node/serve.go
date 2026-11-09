@@ -295,7 +295,7 @@ func (r *Runtime) peerOf(est *session.Established) Peer {
 	p.Device = DeviceID(est.Peer.DeviceID)
 	card, err := objects.VerifyCard(est.Peer.Raw, r.carrierClock.Now())
 	if err != nil {
-		r.log.Warn("node: peer card no longer verifies", "device", p.Device, "err", err)
+		r.log.Warn("node: peer card no longer verifies", "device", p.Device.String()[:8], "err", err)
 		return p
 	}
 	p.Card = card

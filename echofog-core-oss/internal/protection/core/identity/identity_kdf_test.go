@@ -43,7 +43,7 @@ func TestIdentityRootSealedAtTheOldSettingIsUpgraded(t *testing.T) {
 	}
 
 	im2 := newIdentityManager(st)
-	if err := im2.LoadFromStorage(append([]byte(nil), pass...), false); err != nil {
+	if err := im2.LoadFromStorage(append([]byte(nil), pass...)); err != nil {
 		t.Fatalf("the old root did not open: %v", err)
 	}
 	if got, _ := im2.GetOwnPeerID(); got != want {
@@ -54,7 +54,7 @@ func TestIdentityRootSealedAtTheOldSettingIsUpgraded(t *testing.T) {
 	}
 
 	im3 := newIdentityManager(st)
-	if err := im3.LoadFromStorage(append([]byte(nil), pass...), false); err != nil {
+	if err := im3.LoadFromStorage(append([]byte(nil), pass...)); err != nil {
 		t.Fatalf("the re-sealed root did not open: %v", err)
 	}
 	if got, _ := im3.GetOwnPeerID(); got != want {

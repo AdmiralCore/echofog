@@ -211,18 +211,8 @@ func (m *identityManager) SaveToStorage(passphrase []byte) error {
 	return m.storage.Set([]byte("system:identity:root"), dataToSave)
 }
 
-func (m *identityManager) LoadFromStorage(passphrase []byte, isDuress bool) error {
+func (m *identityManager) LoadFromStorage(passphrase []byte) error {
 	defer memguard.WipeBytes(passphrase)
-
-	if isDuress {
-		slog.Warn("DURESS PASSWORD ACTIVATED. Initiating silent wipe...")
-		m.PanicButton()
-		fakeSeed := memguard.NewBuffer(64)
-		defer fakeSeed.Destroy()
-		m.KeyManager = keymanager.NewKeyManager(fakeSeed.Bytes(), m.storage)
-		m.isUnlocked = true
-		return nil
-	}
 
 	protoKeys, err := m.readRoot()
 	if err != nil {
