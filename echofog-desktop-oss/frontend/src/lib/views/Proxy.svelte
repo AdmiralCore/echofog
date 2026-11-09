@@ -9,6 +9,7 @@
   import RelayCard from '../components/RelayCard.svelte';
   import AccessCard from '../components/AccessCard.svelte';
   import TestnetNotice from '../components/TestnetNotice.svelte';
+  import ExitAccessCard from '../components/ExitAccessCard.svelte';
   import { parseRelayLink } from '../contact.js';
   import { t, lang } from '../i18n/index.js';
   import { ask } from '../stores/dialog.js';
@@ -212,6 +213,10 @@
   const share = () => act('share', async () => {
     if (sharing.enabled) {
       await App.StopSharing();
+    } else if (sharing.access) {
+      // protocol 2: the exit is free; say whose address the traffic leaves with, then turn it on
+      if (!(await ask({ title: $t('proxy.share.title'), message: $t('proxy.share.ipWarning'), confirm: $t('proxy.share.start') }))) return;
+      await App.StartSharing({ pricePerMb: 0, freeTestKb: 0, uploadKbps: 0, freePeers: [] });
     } else {
       await App.StartSharing({
         pricePerMb: microPerMb(form.price),
@@ -350,7 +355,7 @@
       <div class="card row killed" role="alert">
         <Icon name="lock" size={18} />
         <span class="grow small">{$t(vpn.blocked ? 'proxy.killBlocked' : 'proxy.killHeld')}</span>
-        <button class="ghost" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
+        <button class="killbtn" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
       </div>
     {/if}
 
@@ -682,7 +687,8 @@
           <p class="small muted">{$t('proxy.share.depositNote')}</p>
         </div>
       {/if}
-      {#if !sharing.enabled}
+      <ExitAccessCard access={sharing.access} enabled={sharing.enabled} on:change={refresh} />
+      {#if !sharing.enabled && !sharing.access}
         <div class="row wrap">
           <label>{$t('proxy.share.priceLabel')}<input bind:value={form.price} /></label>
           <label>{$t('proxy.share.freeKb')}<input type="number" min="0" max="1024" bind:value={form.freeKb} /></label>
@@ -813,4 +819,6 @@
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   .killed { gap: 10px; align-items: center; border-color: #c98a00; background: color-mix(in srgb, #c98a00 12%, var(--surface)); }
+  .killbtn { background: #c98a00; color: #fff; border-color: #c98a00; font-weight: 600; padding: 8px 14px; flex: none; }
+  .killbtn:hover:not(:disabled) { filter: brightness(1.08); }
 </style>

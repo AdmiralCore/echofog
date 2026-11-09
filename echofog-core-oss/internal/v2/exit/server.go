@@ -1,6 +1,7 @@
 package exit
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"math/big"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -126,6 +128,13 @@ type Server struct {
 	udpByID  map[udpKey]*udpAdapter
 	udpCount map[[32]byte]int
 
+	accessMu sync.RWMutex
+	admit    func(Peer) bool
+	refused  func(Peer)
+	denied   atomic.Uint64
+	liveMu   sync.Mutex
+	live     map[*liveStream]struct{}
+
 	stats Stats
 }
 
@@ -170,7 +179,143 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	return &Server{cfg: cfg, clk: cfg.Clock, core: cfg.Core,
 		tcp:     newTCPLimiter(cfg.Limits.TCPPerSecond, cfg.Limits.TCPTargetsPerMin),
 		packet:  newPacketLimiter(cfg.Limits.UDPPacketsPerSec),
-		udpByID: map[udpKey]*udpAdapter{}, udpCount: map[[32]byte]int{}}, nil
+		udpByID: map[udpKey]*udpAdapter{}, udpCount: map[[32]byte]int{}, live: map[*liveStream]struct{}{}}, nil
+}
+
+// SetAccess limits the exit to the clients f admits (by node); nil admits every client. A client it
+// does not admit is refused as if the exit were off, which the client reads as a policy refusal.
+func (s *Server) SetAccess(admit func(Peer) bool, refused func(Peer)) {
+	s.accessMu.Lock()
+	s.admit, s.refused = admit, refused
+	s.accessMu.Unlock()
+}
+
+// admitted says whether the client may be served now, without telling anyone.
+func (s *Server) admitted(p Peer) bool {
+	if !s.core.Enabled() {
+		return false
+	}
+	s.accessMu.RLock()
+	f := s.admit
+	s.accessMu.RUnlock()
+	return f == nil || f(p)
+}
+
+type liveStream struct {
+	p      Peer
+	st     *mux.Stream
+	cancel context.CancelFunc
+}
+
+func (l *liveStream) end() {
+	l.cancel()
+	_ = l.st.CloseWithCode(CodePolicy, "exit access ended")
+}
+
+// track registers an open stream so that Recheck and SetEnabled can end it.
+func (s *Server) track(ctx context.Context, p Peer, st *mux.Stream) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	l := &liveStream{p: p, st: st, cancel: cancel}
+	s.liveMu.Lock()
+	s.live[l] = struct{}{}
+	s.liveMu.Unlock()
+	return ctx, func() {
+		s.liveMu.Lock()
+		delete(s.live, l)
+		s.liveMu.Unlock()
+		cancel()
+	}
+}
+
+// Recheck closes the open streams of the clients that are no longer admitted.
+func (s *Server) Recheck() {
+	s.liveMu.Lock()
+	var gone []*liveStream
+	for l := range s.live {
+		if !s.admitted(l.p) {
+			gone = append(gone, l)
+		}
+	}
+	s.liveMu.Unlock()
+	for _, l := range gone {
+		l.end()
+	}
+}
+
+// deny answers a first frame of a client that is not served, the way an exit that is off does: a
+// policy refusal that says nothing about why.
+func (s *Server) deny(st *mux.Stream, f frame.Frame) {
+	switch f.Type {
+	case TypeTCPConnect:
+		writeResult(st, ResultDenied)
+		_ = st.Close()
+	case TypeUDPOpen:
+		if u, err := ParseUDPOpen(f.Payload); err == nil {
+			_ = st.WriteFrame(TypeUDPOK, 0, UDPOK{Req: u.Req, Code: ResultDenied}.Append(nil))
+		}
+		_ = st.Close()
+	case TypeAccountGet, TypeVoucher:
+		_ = st.CloseWithCode(CodePolicy, "denied")
+	default:
+		s.violation(st, "unexpected frame")
+	}
+}
+
+// SetEnabled turns the exit on or off. Turning it off refuses new streams and closes the live ones.
+func (s *Server) SetEnabled(on bool) {
+	s.core.SetEnabled(on)
+	if on {
+		return
+	}
+	s.liveMu.Lock()
+	all := make([]*liveStream, 0, len(s.live))
+	for l := range s.live {
+		all = append(all, l)
+	}
+	s.liveMu.Unlock()
+	for _, l := range all {
+		l.end()
+	}
+}
+
+// LiveClient is a client with streams open right now.
+type LiveClient struct {
+	Node    [32]byte
+	Streams int
+}
+
+// Live lists the clients with streams open, by node.
+func (s *Server) Live() []LiveClient {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	by := map[[32]byte]int{}
+	for l := range s.live {
+		by[l.p.Node]++
+	}
+	out := make([]LiveClient, 0, len(by))
+	for n, c := range by {
+		out = append(out, LiveClient{Node: n, Streams: c})
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Node[:], out[j].Node[:]) < 0 })
+	return out
+}
+
+// Totals returns the tunnels served, the tunnels refused and the bytes relayed.
+func (s *Server) Totals() (accepted, refused, bytes uint64) {
+	a, r, b := s.core.Stats()
+	return a, r + s.denied.Load(), b
+}
+
+// RefusedBy counts the refusals by reason.
+func (s *Server) RefusedBy() map[string]uint64 {
+	out := s.core.RefusedByReason()
+	if out == nil {
+		out = map[string]uint64{}
+	}
+	if n := s.denied.Load(); n > 0 {
+		out["policy"] += n
+	}
+	return out
 }
 
 // Stats returns the counters.
@@ -184,6 +329,19 @@ func (s *Server) Handle(ctx context.Context, p Peer, st *mux.Stream) {
 		s.violation(st, "first frame")
 		return
 	}
+	if !s.admitted(p) {
+		s.denied.Add(1)
+		s.accessMu.RLock()
+		refused := s.refused
+		s.accessMu.RUnlock()
+		if refused != nil && s.core.Enabled() {
+			refused(p)
+		}
+		s.deny(st, f)
+		return
+	}
+	ctx, done := s.track(ctx, p, st)
+	defer done()
 	switch f.Type {
 	case TypeTCPConnect:
 		s.handleTCP(ctx, p, st, f.Payload)

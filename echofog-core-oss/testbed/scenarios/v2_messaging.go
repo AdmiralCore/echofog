@@ -145,7 +145,7 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) (gate.Row, string
 		got := delivered()
 		at = time.Since(start)
 		samples = append(samples, recoverySample{At: at, Sender: len(a.RT.Status().Sessions), Receiver: len(b.RT.Status().Sessions), Delivered: got})
-		if (got == len(ids) && len(ids) > 0) || at > offlineWatch {
+		if (got == len(ids) && len(ids) > 0) || at > offlineWatchFor(env) {
 			break
 		}
 		time.Sleep(5 * time.Second)
@@ -171,9 +171,19 @@ func offlineQueueRow(ctx context.Context, dir string, env Env) (gate.Row, string
 	return newRow(id, "offline", value, limit, gate.Red, timeline+"; "+why), finding
 }
 
+// offlineWatchFor is how long the row watches after the limit.
+func offlineWatchFor(env Env) time.Duration {
+	if env.Short {
+		return offlineWatchShort
+	}
+	return offlineWatch
+}
+
 const (
 	offlineLimit = 2 * time.Minute
 	offlineWatch = 9 * time.Minute
+	// offlineWatchShort keeps go test inside its default ten minutes when the row is red.
+	offlineWatchShort = 3 * time.Minute
 )
 
 // offlineWhy says what the two ends knew when the messages did not arrive: every session with its

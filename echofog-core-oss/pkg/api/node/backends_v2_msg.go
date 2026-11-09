@@ -102,6 +102,7 @@ type v2Subs struct {
 	group func(GroupEvent)
 	file  func(dto.FileTransferDTO)
 	state func(MessageStateDTO)
+	ring  func(IncomingCall)
 	b     *v2MsgBackend // set once attached
 }
 
@@ -140,6 +141,7 @@ type v2MsgBackend struct {
 	cancelConv  func()
 	cancelGroup func()
 	cancelFile  func()
+	cancelRing  func()
 }
 
 var (
@@ -159,7 +161,7 @@ func (n *NodeApi) AttachV2Messenger(m v2Messenger) {
 	n.backends.chat, n.backends.group, n.backends.file = b, b, b
 	n.v2m.mu.Lock()
 	n.v2m.b = b
-	conv, group, file := n.v2m.conv, n.v2m.group, n.v2m.file
+	conv, group, file, ring := n.v2m.conv, n.v2m.group, n.v2m.file, n.v2m.ring
 	n.v2m.mu.Unlock()
 	if conv != nil {
 		b.SubscribeConversations(conv)
@@ -169,5 +171,8 @@ func (n *NodeApi) AttachV2Messenger(m v2Messenger) {
 	}
 	if file != nil {
 		b.OnFileTransfer(file)
+	}
+	if ring != nil {
+		b.watchCalls(ring, n.callsWho)
 	}
 }

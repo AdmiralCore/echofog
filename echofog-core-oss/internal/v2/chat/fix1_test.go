@@ -359,30 +359,30 @@ func TestReceiveHasATimeLimit(t *testing.T) {
 
 // ---- finding 5: the failure tables are bounded -------------------------------------------------------
 
-func TestFailureTablesAreBounded(t *testing.T) {
+func TestUnauthenticatedTableIsBounded(t *testing.T) {
 	w := newWorld(t)
 	a := w.newPeer()
-	for i := 0; i < 3*maxTrackedDevices; i++ {
+	for i := 0; i < 3*maxUnauthDevices; i++ {
 		var dev, node [32]byte
 		var id [16]byte
 		_, _ = rand.Read(dev[:])
 		_, _ = rand.Read(node[:])
 		_, _ = rand.Read(id[:])
-		a.svc.noteFailure(dev, node, id)
+		a.svc.noteUnauthenticated(dev, node, id)
 	}
 	a.svc.mu.Lock()
-	n := len(a.svc.fails) + len(a.svc.recov)
+	n := len(a.svc.unauth)
 	a.svc.mu.Unlock()
-	if n > 2*maxTrackedDevices {
-		t.Fatalf("%d entries in the failure tables, the limit is %d", n, 2*maxTrackedDevices)
+	if n == 0 || n > maxUnauthDevices {
+		t.Fatalf("%d entries in the unauthenticated table, the limit is %d", n, maxUnauthDevices)
 	}
 	w.clock.Add(time.Hour)
 	var dev, node [32]byte
-	a.svc.noteFailure(dev, node, [16]byte{1})
+	a.svc.noteUnauthenticated(dev, node, [16]byte{1})
 	a.svc.mu.Lock()
-	n = len(a.svc.fails) + len(a.svc.recov)
+	n = len(a.svc.unauth)
 	a.svc.mu.Unlock()
-	if n > 2 {
+	if n > 1 {
 		t.Fatalf("%d entries survive an hour, expired ones must go", n)
 	}
 }

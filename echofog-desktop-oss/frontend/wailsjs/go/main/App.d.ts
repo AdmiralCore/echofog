@@ -180,6 +180,8 @@ export function GetProbeDomains():Promise<Array<string>>;
 
 export function GetProfiles():Promise<Array<string>>;
 
+export function GetProtocol():Promise<main.ProtocolDTO>;
+
 export function GetProxySettings():Promise<node.ProxyStatus>;
 
 export function GetRelayStatus():Promise<node.RelayStatus>;
@@ -396,6 +398,8 @@ export function SetProbeDomains(arg1:Array<string>):Promise<void>;
 
 export function SetProfileService(arg1:main.ProfileService):Promise<void>;
 
+export function SetProtocol(arg1:number):Promise<void>;
+
 export function SetProxySettings(arg1:string,arg2:string):Promise<void>;
 
 export function SetRelaySettings(arg1:node.RelaySettingsDTO):Promise<void>;
@@ -481,3 +485,13 @@ export function VaultExecuteWithdraw():Promise<string>;
 export function VaultRequestWithdraw():Promise<string>;
 
 export function WatchStream(arg1:string):Promise<void>;
+
+export function SharingApprove(arg1:string, arg2:string):Promise<void>;
+
+export function SharingReject(arg1:string):Promise<void>;
+
+export function SharingRevoke(arg1:string):Promise<void>;
+
+export function SharingOpenFor(arg1:number):Promise<void>;
+
+export function SharingCloseOpen():Promise<void>;

@@ -39,6 +39,9 @@ type specEntry struct {
 	Foreign       string `json:"foreign"`
 	WindowSeconds int    `json:"window_seconds"`
 	ListenMillis  int    `json:"listen_ms"`
+	// AltLocal is a second source address of the prober (an IP literal on this machine): the
+	// replay "from another address" binds it. Empty skips that case.
+	AltLocal string `json:"alt_local"`
 }
 
 // LoadSpec reads a JSON list of probe entries: scenario, network, addr, cover, sni, the captured
@@ -105,8 +108,16 @@ func LoadSpecWith(r io.Reader, o SpecOptions) ([]Case, error) {
 		}
 		in.Window = time.Duration(e.WindowSeconds) * time.Second
 		in.Listen = time.Duration(e.ListenMillis) * time.Millisecond
+		var alt Dialer
+		if e.AltLocal != "" {
+			ip, err := netip.ParseAddr(e.AltLocal)
+			if err != nil {
+				return nil, fmt.Errorf("probe spec: entry %d: alt_local %q is not an IP address", i, e.AltLocal)
+			}
+			alt = boundDialer(network, ip)
+		}
 		out = append(out, Case{
-			Target: Target{Name: e.Scenario, Network: network, Addr: e.Addr, Cover: e.Cover, SNI: e.SNI},
+			Target: Target{Name: e.Scenario, Network: network, Addr: e.Addr, Cover: e.Cover, SNI: e.SNI, AltDial: alt},
 			Inputs: in,
 		})
 	}
@@ -171,4 +182,17 @@ func checkTarget(addr string, allowPublic bool) error {
 		}
 	}
 	return fmt.Errorf("%q is a public address: the prober asks the lab only unless -allow-public says that a public node is meant", addr)
+}
+
+// boundDialer dials from a given local address.
+func boundDialer(network string, ip netip.Addr) Dialer {
+	return func(ctx context.Context, n, addr string) (net.Conn, error) {
+		d := &net.Dialer{Timeout: 3 * time.Second}
+		if network == "udp" {
+			d.LocalAddr = &net.UDPAddr{IP: ip.AsSlice()}
+		} else {
+			d.LocalAddr = &net.TCPAddr{IP: ip.AsSlice()}
+		}
+		return d.DialContext(ctx, n, addr)
+	}
 }

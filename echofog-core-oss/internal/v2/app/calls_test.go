@@ -1,16 +1,25 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/echofog/echofog-core/internal/services/call"
+	"github.com/echofog/echofog-core/internal/services/call/signaling"
+	"github.com/echofog/echofog-core/internal/services/call/tree"
 	"github.com/echofog/echofog-core/internal/v2/app"
+	v2call "github.com/echofog/echofog-core/internal/v2/call"
 	"github.com/echofog/echofog-core/internal/v2/call/callnet"
+	callpb "github.com/echofog/echofog-core/internal/v2/call/pb"
 	"github.com/echofog/echofog-core/internal/v2/call/route"
+	"github.com/echofog/echofog-core/internal/v2/call/sigbridge"
+	"github.com/echofog/echofog-core/internal/v2/call/v1sig"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/pkg/api/types"
@@ -142,4 +151,82 @@ func TestNetDropsReadTheTransportCounters(t *testing.T) {
 	out, in := c.NetDrops()
 	require.Zero(t, out)
 	require.Zero(t, in)
+}
+
+func callPeer(b byte) types.PeerID { return types.PeerID{b, b, b} }
+
+// joinSignalFor builds the call/2 join a member sends to the coordinator, as call.Service would
+// hand it to the bridge after verifying it.
+func joinSignalFor(t *testing.T, invite string, member types.PeerID) *callpb.CallSignal {
+	t.Helper()
+	roomID, roomKey := call.DeriveRoom(invite)
+	s := newFakeSigner()
+	payload := signaling.JoinPayload{
+		Profile: tree.PeerNodeProfile{
+			PeerID: member, UploadKbps: 8000, MaxRelayChildren: 2,
+			RTT: time.Millisecond, LastHeartbeat: time.Now(),
+		},
+		Proof:    signaling.JoinProof(roomKey, roomID, member),
+		KX:       bytes.Repeat([]byte{member[0]}, 32),
+		SK:       append([]byte(nil), s.pub[:]...),
+		JoinSalt: bytes.Repeat([]byte{member[0]}, 16),
+	}
+	v1, err := signaling.EncodeSignedSignal(s, signaling.ActionJoin, roomID, member, 1, payload)
+	require.NoError(t, err)
+	m, err := v1sig.ToPB(v1)
+	require.NoError(t, err)
+	return m
+}
+
+// The v2 manager sends and receives its signals through the bridge, which hands the call layer a
+// v1 envelope unsigned: the session that carried it is the authentication (services.md 9.1,
+// ЗВ-1). The incoming signals must reach the call layer, for a one-to-one call and for a group.
+func TestIncomingSignalsFromTheBridgeReachTheManager(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		members []types.PeerID
+	}{
+		{"one to one", []types.PeerID{callPeer(21)}},
+		{"group", []types.PeerID{callPeer(21), callPeer(22), callPeer(23)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, h := newCalls(t)
+			_, err := c.Join("invite", "", 8000, "")
+			require.NoError(t, err)
+			b := sigbridge.New(sigbridge.Config{
+				Self: [32]byte(c.Self()),
+				Deliver: func(from [32]byte, v1 []byte) {
+					h.tr.DeliverSignal(from, v1)
+				},
+			})
+			for _, member := range tc.members {
+				b.OnSignal(context.Background(), v2call.Peer{Device: [32]byte(member)},
+					joinSignalFor(t, "invite", member), nil)
+			}
+			snap, ok := c.Manager().Snapshot()
+			require.True(t, ok)
+			for _, member := range tc.members {
+				require.Contains(t, snap.Members, member, "the join did not reach the call layer")
+			}
+		})
+	}
+}
+
+// The sender is still checked when the envelope itself is not verified: a hop-local signal that
+// names another device is dropped (services.md 9.1, ЗВ-1).
+func TestBridgeSignalInAnotherSendersNameIsDropped(t *testing.T) {
+	c, h := newCalls(t)
+	_, err := c.Join("invite", "", 8000, "")
+	require.NoError(t, err)
+	b := sigbridge.New(sigbridge.Config{
+		Self:    [32]byte(c.Self()),
+		Deliver: func(from [32]byte, v1 []byte) { h.tr.DeliverSignal(from, v1) },
+	})
+	real, claimed := callPeer(31), callPeer(32)
+	// The join says sender 32 but arrived over the session with 31.
+	b.OnSignal(context.Background(), v2call.Peer{Device: [32]byte(real)},
+		joinSignalFor(t, "invite", claimed), nil)
+	snap, ok := c.Manager().Snapshot()
+	require.True(t, ok)
+	require.NotContains(t, snap.Members, claimed, "a signal in another sender's name was trusted")
 }

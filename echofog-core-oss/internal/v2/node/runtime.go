@@ -81,7 +81,10 @@ type Config struct {
 	// mailbox client for recipients that are away (mailbox/2 client, T7.4; nil until then).
 	Chat       bool
 	ChatEvents chat.Events
-	ChatMail   chat.Mail
+	// ChatDir finds the devices, cards and prekeys of an account for chat/2 and files/2. Nil: the DHT. A
+	// host without a DHT network of its own (a test of two runtimes in one process) supplies its own.
+	ChatDir  chat.Directory
+	ChatMail chat.Mail
 	// Files turns files/2 on (T8.1/T11.3d): the node serves the files it offers and the app fetches the
 	// ones it is offered through OpenFiles. FilesLimits bound what the server holds; FilesOnDone is called
 	// when a recipient confirmed it got a whole file.
@@ -255,9 +258,17 @@ type Runtime struct {
 	// pathPairs maps a bound path to the carrier pair it was opened to (H11/H15). Only paths
 	// this node opened as a carrier client are counted. deadPaths remembers failures that
 	// arrived before the pair was recorded, so a late record cannot resurrect a slot.
-	pathsMu   sync.Mutex
+	pathsMu sync.Mutex
+	// live holds the established sessions until they end: Stop closes what a GOAWAY did not end.
+	liveMu    sync.Mutex
+	live      map[*mux.Session]struct{}
 	pathPairs map[pathKey]session.Pair
 	deadPaths map[pathKey]struct{}
+	// repairing holds the sessions a repair is running for; repairOpt is what a repair dials with.
+	repairing    map[[16]byte]bool
+	sessionCards map[[16]byte]*objects.Card
+	repairOpt    DialOpt
+	healthyFn    func(*mux.Session) bool
 
 	identity Identity
 	vis      cards.Visibility
@@ -265,8 +276,12 @@ type Runtime struct {
 	peers    *pex.Store
 	pex      *pex.Service
 
-	mu         sync.Mutex
-	handlers   map[[2]uint64]Handler
+	mu       sync.Mutex
+	handlers map[[2]uint64]Handler
+
+	// hostMu guards hosted, the exit a desktop offers while it runs (exit_host.go).
+	hostMu     sync.Mutex
+	hosted     *hostedExit
 	table      *session.Table
 	listeners  []carrier.Listener
 	background Background
@@ -386,6 +401,8 @@ func New(cfg Config) (*Runtime, error) {
 		policy:       session.NewPathPolicy(session.PathPolicyConfig{Clock: carrierClock}),
 		pathPairs:    map[pathKey]session.Pair{},
 		deadPaths:    map[pathKey]struct{}{},
+		live:         map[*mux.Session]struct{}{},
+		repairing:    map[[16]byte]bool{},
 		background:   cfg.Profile.Background,
 		rules:        cfg.RoutePolicy,
 	}
@@ -716,6 +733,8 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	if table != nil {
 		_ = table.Close()
 	}
+	// the GOAWAY above lets a session drain for up to 15 s; a stopping runtime gives it a moment and then ends it
+	r.closeLiveSessions(ctx)
 	r.stopAccess()
 	r.dgrams.close()
 

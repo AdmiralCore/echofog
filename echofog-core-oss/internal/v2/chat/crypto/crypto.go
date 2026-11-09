@@ -107,10 +107,20 @@ const (
 	metaKey    = "v2-meta"    // when the current signed and KEM prekeys were first seen
 	prekeysKey = "v2-prekeys" // the prekeys/2 envelope issued last
 	bindPrefix = "bind:"      // sessions namespace: device -> account (node ID)
-	prevPrefix = "prev:"      // sessions namespace: device -> end (unix seconds) of the kept replaced session
+	prevPrefix = "prev:"      // sessions namespace: device -> history of the kept replaced sessions
 	clockSkew  = time.Minute  // tolerance when a creation time is in the future
 	metaLen    = 32 + 8 + 32 + 8
+	// maxPrevSessions bounds how many replaced sessions of one device are kept. The spec promises
+	// the session before the current one for seven days; more than a couple in that window are a
+	// peer that lost its state repeatedly, and a hostile one must not grow the store forever.
+	maxPrevSessions = 8
 )
+
+// prevEntry is one replaced session of a device and the time its retention ends (unix seconds).
+type prevEntry struct {
+	seq uint64
+	end int64
+}
 
 // Crypto holds the prekeys and the sessions of the local device. All methods are safe for
 // concurrent use; they run one at a time, which is also what makes a one-time prekey usable
@@ -406,53 +416,133 @@ func (c *Crypto) Peer(device [32]byte) (node [32]byte, ok bool) {
 // PrevRetention is how long a replaced session stays for messages still on the way (services.md 4.4).
 const PrevRetention = 7 * 24 * time.Hour
 
-// prevID is the session-manager key under which the replaced session of device is kept.
-func prevID(device [32]byte) types.PeerID {
-	return types.PeerID(sha256.Sum256(append([]byte("echofog/chat2/prev"), device[:]...)))
+// prevID is the session-manager key under which the replaced session of device is kept. seq 0 is
+// the single slot of the first format, kept so a store made before the history is still read.
+func prevID(device [32]byte, seq uint64) types.PeerID {
+	if seq == 0 {
+		return types.PeerID(sha256.Sum256(append([]byte("echofog/chat2/prev"), device[:]...)))
+	}
+	buf := make([]byte, 0, len("echofog/chat2/prev")+len(device)+8)
+	buf = append(buf, "echofog/chat2/prev"...)
+	buf = append(buf, device[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, seq)
+	return types.PeerID(sha256.Sum256(buf))
 }
 
 func (c *Crypto) prevKey(device [32]byte) []byte {
 	return []byte(prevPrefix + c.sessDB.BlindID(hex.EncodeToString(device[:])))
 }
 
-// There is one slot: two replacements within 7 days leave only the session replaced last, so a
-// message of the one before is lost (it is sent again by its sender after a failed delivery).
-// keepPrev moves the current session with device, if there is one, to the replaced slot: a session
-// replaced by a fresh one still opens messages sent before the replacement for 7 days. c.mu is held.
+func encodePrevHistory(hist []prevEntry) []byte {
+	out := binary.BigEndian.AppendUint32(nil, uint32(len(hist)))
+	for _, e := range hist {
+		out = binary.BigEndian.AppendUint64(out, e.seq)
+		out = binary.BigEndian.AppendUint64(out, uint64(e.end))
+	}
+	return out
+}
+
+func decodePrevHistory(b []byte) ([]prevEntry, bool) {
+	if len(b) == 8 { // the first format: one slot, the end time only
+		return []prevEntry{{seq: 0, end: int64(binary.BigEndian.Uint64(b))}}, true
+	}
+	if len(b) < 4 {
+		return nil, false
+	}
+	n := binary.BigEndian.Uint32(b)
+	if n > maxPrevSessions || len(b) != 4+int(n)*16 {
+		return nil, false
+	}
+	hist := make([]prevEntry, 0, n)
+	for i := 0; i < int(n); i++ {
+		off := 4 + i*16
+		hist = append(hist, prevEntry{
+			seq: binary.BigEndian.Uint64(b[off:]),
+			end: int64(binary.BigEndian.Uint64(b[off+8:])),
+		})
+	}
+	return hist, true
+}
+
+// prevHistory reads the kept replaced sessions of device, dropping the expired ones together with
+// their records. c.mu is held.
+func (c *Crypto) prevHistory(device [32]byte) []prevEntry {
+	b, err := c.sessKV.Get(c.prevKey(device))
+	if err != nil {
+		return nil
+	}
+	hist, ok := decodePrevHistory(b)
+	if !ok {
+		return nil
+	}
+	now := c.cfg.Now().Unix()
+	kept := hist[:0:0]
+	for _, e := range hist {
+		if e.end > now {
+			kept = append(kept, e)
+			continue
+		}
+		_ = c.sm.Delete(prevID(device, e.seq))
+	}
+	if len(kept) != len(hist) {
+		_ = c.storePrevHistory(device, kept)
+	}
+	return kept
+}
+
+func (c *Crypto) storePrevHistory(device [32]byte, hist []prevEntry) error {
+	if len(hist) == 0 {
+		return c.sessKV.Delete(c.prevKey(device))
+	}
+	return c.sessKV.Put(c.prevKey(device), encodePrevHistory(hist))
+}
+
+// keepPrev moves the current session with device, if there is one, to the history: a session
+// replaced by a fresh one still opens messages sent before the replacement for 7 days. The history
+// keeps more than one slot, so a second replacement within the week does not lose the session
+// before it (services.md 4.4). c.mu is held.
 func (c *Crypto) keepPrev(device [32]byte) error {
 	old, err := c.sm.Load(types.PeerID(device))
 	if err != nil {
 		return nil // no session to keep
 	}
-	if err := c.sm.Save(prevID(device), old); err != nil {
+	hist := c.prevHistory(device)
+	var seq uint64 = 1
+	for _, e := range hist {
+		if e.seq >= seq {
+			seq = e.seq + 1
+		}
+	}
+	if err := c.sm.Save(prevID(device, seq), old); err != nil {
 		return err
 	}
-	end := uint64(c.cfg.Now().Add(PrevRetention).Unix())
-	return c.sessKV.Put(c.prevKey(device), binary.BigEndian.AppendUint64(nil, end))
+	hist = append(hist, prevEntry{seq: seq, end: c.cfg.Now().Add(PrevRetention).Unix()})
+	for len(hist) > maxPrevSessions {
+		_ = c.sm.Delete(prevID(device, hist[0].seq))
+		hist = hist[1:]
+	}
+	return c.storePrevHistory(device, hist)
 }
 
-// dropPrev forgets the replaced session of device. c.mu is held.
-func (c *Crypto) dropPrev(device [32]byte) {
-	_ = c.sm.Delete(prevID(device))
-	_ = c.sessKV.Delete(c.prevKey(device))
+// prevSlot is one kept replaced session and the key its state is stored under.
+type prevSlot struct {
+	seq  uint64
+	sess *x3dh.X3DHSession
 }
 
-// loadPrev returns the replaced session of device while it is within its 7 days; an expired one is
-// deleted. c.mu is held.
-func (c *Crypto) loadPrev(device [32]byte) *x3dh.X3DHSession {
-	b, err := c.sessKV.Get(c.prevKey(device))
-	if err != nil || len(b) != 8 {
-		return nil
+// loadPrevs returns the kept replaced sessions of device within their 7 days, newest first. c.mu
+// is held.
+func (c *Crypto) loadPrevs(device [32]byte) []prevSlot {
+	hist := c.prevHistory(device)
+	out := make([]prevSlot, 0, len(hist))
+	for i := len(hist) - 1; i >= 0; i-- {
+		sess, err := c.sm.Load(prevID(device, hist[i].seq))
+		if err != nil {
+			continue
+		}
+		out = append(out, prevSlot{seq: hist[i].seq, sess: sess})
 	}
-	if c.cfg.Now().Unix() >= int64(binary.BigEndian.Uint64(b)) {
-		c.dropPrev(device)
-		return nil
-	}
-	sess, err := c.sm.Load(prevID(device))
-	if err != nil {
-		return nil
-	}
-	return sess
+	return out
 }
 
 // ikOf reads the identity DH key of a prekeys/2 object.
@@ -667,18 +757,17 @@ func (c *Crypto) Decrypt(device [32]byte, msg []byte) ([]byte, error) {
 	}
 	plain, err := sess.RatchetDecrypt(em)
 	if err != nil {
-		// a message sent before the session was replaced
-		prev := c.loadPrev(device)
-		if prev == nil {
-			return nil, ErrRejected
+		// a message sent before the session was replaced: try the kept ones, newest first
+		for _, prev := range c.loadPrevs(device) {
+			if plain, err = prev.sess.RatchetDecrypt(em); err != nil {
+				continue
+			}
+			if err := c.sm.Save(prevID(device, prev.seq), prev.sess); err != nil {
+				return nil, err
+			}
+			return plain, nil
 		}
-		if plain, err = prev.RatchetDecrypt(em); err != nil {
-			return nil, ErrRejected
-		}
-		if err := c.sm.Save(prevID(device), prev); err != nil {
-			return nil, err
-		}
-		return plain, nil
+		return nil, ErrRejected
 	}
 	if err := c.sm.Save(types.PeerID(device), sess); err != nil {
 		return nil, err

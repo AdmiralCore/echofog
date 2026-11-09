@@ -63,6 +63,10 @@ func v2Err(err error) error {
 type v2NetBackend struct {
 	v2PendingBackend
 	app v2App
+	// check says whether the runtime can run in a mode; restart rebuilds it from the saved settings
+	// (T11.7). Both nil: the mode applies at the next start.
+	check   func(app.Mode) error
+	restart func() error
 }
 
 // v2ContactBackend is the protocol 2 contacts backend.
@@ -77,7 +81,7 @@ func (n *NodeApi) AttachV2(a v2App) {
 	if a == nil || n.node == nil || n.node.Cfg == nil || !n.node.Cfg.IsV2() {
 		return
 	}
-	n.backends.net = &v2NetBackend{app: a}
+	n.backends.net = &v2NetBackend{app: a, check: n.v2CheckMode, restart: n.restartV2}
 	n.backends.contact = &v2ContactBackend{app: a}
 	n.v2n.attach(a)
 }
@@ -105,7 +109,25 @@ func (b *v2NetBackend) GetAccessStatus() (AccessStatus, error) {
 func (b *v2NetBackend) SetAccessMode(mode string) error {
 	switch m := app.Mode(strings.TrimSpace(mode)); m {
 	case app.ModePublic, app.ModeHidden:
-		return v2Err(b.app.SetMode(m))
+		if b.check != nil {
+			if err := b.check(m); err != nil {
+				return err
+			}
+		}
+		st, err := b.app.AccessStatus(context.Background())
+		if err != nil {
+			return v2Err(err)
+		}
+		if err := b.app.SetMode(m); err != nil {
+			return v2Err(err)
+		}
+		// a changed mode applies by a restart of the runtime: the cards and the listeners are built once
+		if b.restart != nil && st.Mode != m {
+			if err := b.restart(); err != nil {
+				return &v2UserError{msg: "Не удалось перезапустить сеть в новом режиме доступа"}
+			}
+		}
+		return nil
 	}
 	return &v2UserError{msg: "Этот режим доступа недоступен в протоколе 2"}
 }

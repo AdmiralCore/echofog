@@ -155,3 +155,32 @@ func TestLoadSpecRefusesPublicAddressesUnlessAllowed(t *testing.T) {
 		assert.Len(t, cases, 1)
 	}
 }
+
+func TestLoadSpecAltLocalGivesTheReplayFromElsewhereASourceAddress(t *testing.T) {
+	spec := `[{"scenario":"ordinary","network":"tcp","addr":"127.0.0.1:%d","cover":"127.0.0.1:%d","alt_local":"127.0.0.2"}]`
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	seen := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		seen <- c.RemoteAddr().(*net.TCPAddr).IP.String()
+		_ = c.Close()
+	}()
+	cases, err := LoadSpec(strings.NewReader(fmt.Sprintf(spec, port, port)))
+	require.NoError(t, err)
+	require.NotNil(t, cases[0].Target.AltDial, "alt_local must set the second source address")
+	c, err := cases[0].Target.AltDial(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Skipf("this machine cannot bind 127.0.0.2: %v", err)
+	}
+	_ = c.Close()
+	assert.Equal(t, "127.0.0.2", <-seen)
+
+	_, err = LoadSpec(strings.NewReader(`[{"scenario":"ordinary","addr":"127.0.0.1:1","cover":"127.0.0.1:2","alt_local":"not-an-ip"}]`))
+	assert.Error(t, err, "alt_local is an IP literal")
+}

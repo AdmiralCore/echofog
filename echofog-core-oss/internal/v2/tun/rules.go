@@ -63,8 +63,10 @@ type Rule struct {
 	V6         bool         // the rule applies to IPv6 (otherwise IPv4)
 	RemotePort uint16       // 0: any
 	LocalPort  uint16       // 0: any
-	Weight     uint8
-	Persistent bool
+	// ICMPLo..ICMPHi limit an ICMP rule to these message types (both 0: any type).
+	ICMPLo, ICMPHi uint8
+	Weight         uint8
+	Persistent     bool
 }
 
 // Packet is what Evaluate decides on.
@@ -74,6 +76,9 @@ type Packet struct {
 	Proto  Proto
 	Remote netip.AddrPort
 	Local  uint16
+	// ICMPType is the message type of an ICMP packet (ICMPv6: 133 router solicitation ... 136
+	// neighbour advertisement).
+	ICMPType uint8
 }
 
 // Plan describes what the kill switch must allow around the tunnel.
@@ -126,6 +131,16 @@ var (
 
 	dhcpV4 = append([]netip.Prefix{netip.MustParsePrefix("255.255.255.255/32")}, lanV4...)
 	dhcpV6 = []netip.Prefix{netip.MustParsePrefix("ff02::/16"), netip.MustParsePrefix("fe80::/10")}
+
+	// ndV6 are the only peers of IPv6 neighbour discovery: the link-local unicast range and the
+	// link-local multicast scope (all nodes, all routers, solicited-node groups).
+	ndV6 = []netip.Prefix{netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("ff02::/16")}
+)
+
+// ICMPv6 message types 133 (router solicitation) to 136 (neighbour advertisement).
+const (
+	ndLo = 133
+	ndHi = 136
 )
 
 // BuildRules turns a Plan into the persistent rule set of the kill switch: everything is blocked
@@ -212,6 +227,23 @@ func BuildRules(p Plan) ([]Rule, error) {
 		}
 	}
 
+	// Neighbour discovery of IPv6, narrow: only ICMPv6 types 133-136, only to and from link-local
+	// unicast and ff02::/16, only on the physical interface, and only when the plan has an IPv6
+	// endpoint to reach. Without it an IPv6-only network cannot find its router or the neighbour of
+	// the exit; with it nothing leaves the link (these addresses are not routed).
+	hasV6 := false
+	for _, e := range p.Endpoints {
+		hasV6 = hasV6 || e.Addr.Addr().Unmap().Is6()
+	}
+	if hasV6 {
+		for _, d := range []Dir{Out, In} {
+			for i, pfx := range ndV6 {
+				add(Rule{Name: fmt.Sprintf("permit-nd6-%d-%s", i, dirName(d)), Action: Permit, Dir: d, V6: true, Iface: IfacePhysical,
+					Proto: ProtoICMP, Remote: pfx, ICMPLo: ndLo, ICMPHi: ndHi, Weight: weightPermit})
+			}
+		}
+	}
+
 	if p.AllowLAN {
 		for _, d := range []Dir{Out, In} {
 			for i, pfx := range append(append([]netip.Prefix(nil), lanV4...), lanV6...) {
@@ -244,7 +276,8 @@ func (r Rule) matches(p Packet) bool {
 		r.V6 != addr.Is6(),
 		r.RemotePort != 0 && r.RemotePort != p.Remote.Port(),
 		r.LocalPort != 0 && r.LocalPort != p.Local,
-		r.Remote.IsValid() && !r.Remote.Contains(addr):
+		r.Remote.IsValid() && !r.Remote.Contains(addr),
+		r.ICMPHi != 0 && (p.ICMPType < r.ICMPLo || p.ICMPType > r.ICMPHi):
 		return false
 	}
 	return true

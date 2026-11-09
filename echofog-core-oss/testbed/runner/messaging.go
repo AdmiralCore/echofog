@@ -326,8 +326,8 @@ func flowGroupMessage(nodes map[string]*node, v *verdict) {
 	v.check(f.ok(), "[group] message reached every member (via %s)", pathStr(f.path))
 }
 
-// 3. Offline store-and-forward: the recipient is taken down, a message is sent, and it must be
-//    stored at a relay and delivered when the recipient returns with the same identity.
+//  3. Offline store-and-forward: the recipient is taken down, a message is sent, and it must be
+//     stored at a relay and delivered when the recipient returns with the same identity.
 func flowOfflineStoreAndForward(nodes map[string]*node, v *verdict, out string) {
 	from, to := "a1", "c1"
 	text := "msgbed offline while-you-were-away"

@@ -326,3 +326,34 @@ func TestServeEndsWithSession(t *testing.T) {
 		t.Fatal("Serve did not return after the session closed")
 	}
 }
+
+// Remove takes a service out of the offer of new sessions and stops it being selected.
+func TestRegistryRemoveStopsOfferingAndServing(t *testing.T) {
+	r := testRegistry(t)
+	r.Serve(Exit, 2, nil)
+	has := func(id uint64) bool {
+		for _, o := range r.Offer(false) {
+			if o.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(Exit) {
+		t.Fatal("exit is not offered after Serve")
+	}
+	if got := r.Select([]Offer{{ID: Exit, Versions: []uint64{2}}}); len(got) != 1 {
+		t.Fatalf("selection %v", got)
+	}
+	r.Remove(Exit)
+	if has(Exit) {
+		t.Fatal("exit is still offered after Remove")
+	}
+	if got := r.Select([]Offer{{ID: Exit, Versions: []uint64{2}}}); len(got) != 0 {
+		t.Fatalf("a removed service was selected: %v", got)
+	}
+	if !has(Chat) {
+		t.Fatal("Remove took another service away")
+	}
+	r.Remove(Exit) // removing again is harmless
+}
