@@ -25,13 +25,6 @@ type BootstrapNode struct {
 	Kind string `json:"kind,omitempty"`
 }
 
-// SetBootstrapNodeEnabled switches one built-in entry of a protocol 2 list on or off.
-func (n *NodeApi) SetBootstrapNodeEnabled(index int, on bool) error { return ErrV2NotBuilt }
-
-// CheckBootstrapNode dials one entry and reports whether it answered. The address stays out of the
-// log.
-func (n *NodeApi) CheckBootstrapNode(entry string) (bool, error) { return false, ErrV2NotBuilt }
-
 // BootstrapStatus lists the nodes built into this release and the ones the user added. When the
 // built-in ones are blocked (or a release ships none), a node address from a friend or from the
 // project's channel gets the app into the network.

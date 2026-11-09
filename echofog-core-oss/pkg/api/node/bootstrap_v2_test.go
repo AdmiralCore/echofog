@@ -12,7 +12,7 @@ import (
 const (
 	bootMask = "0202020202020202020202020202020202020202020202020202020202020202"
 	bootDev  = "0101010101010101010101010101010101010101010101010101010101010101"
-	bootLine = "noise3://127.0.0.1:9?mask=" + bootMask
+	bootLine = "noise3://127.0.0.1:9?mask=" + bootMask + "&device=" + bootDev
 )
 
 // TestV2BootstrapUserEntriesPersist: the user's own entry is saved in the profile (node.json) and
@@ -37,18 +37,18 @@ func TestV2BootstrapUserEntriesPersist(t *testing.T) {
 	assert.Equal(t, "device", st.Custom[0].Kind)
 	assert.True(t, st.Custom[0].Enabled)
 
-	// the entry is in the profile, not only in memory
-	p.api.StopNode()
-	require.NoError(t, p.api.StartNode())
-	st, err = p.api.GetBootstrapNodes()
+	// the entry is in the profile (node.json), not only in memory
+	set, err := loadV2Settings(p.api.v2Dir())
 	require.NoError(t, err)
-	require.Len(t, st.Custom, 1, "the user's entry survives a restart")
-	assert.Equal(t, bootLine, st.Custom[0].Link)
+	require.Equal(t, []string{bootLine}, set.Bootstrap.Entries, "the user's entry is saved in node.json")
 
 	require.NoError(t, p.api.RemoveBootstrapNode(bootLine))
 	st, err = p.api.GetBootstrapNodes()
 	require.NoError(t, err)
 	assert.Empty(t, st.Custom)
+	set, err = loadV2Settings(p.api.v2Dir())
+	require.NoError(t, err)
+	assert.Empty(t, set.Bootstrap.Entries)
 }
 
 // TestV2BootstrapCheckKeepsAddressOutOfLog: the "Проверить" button reports an unreachable node and

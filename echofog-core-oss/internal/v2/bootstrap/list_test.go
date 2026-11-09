@@ -200,6 +200,25 @@ func mustBuiltin(t *testing.T) []byte {
 	return raw
 }
 
+func TestManagerCustomPersists(t *testing.T) {
+	var saved []string
+	m := bootstrap.OpenManager(bootstrap.ManagerConfig{Custom: nil, Now: func() time.Time { return testNow },
+		SaveCustom: func(lines []string) error { saved = append([]string(nil), lines...); return nil }})
+	if _, err := m.AddCustom(listA); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("the save hook got %d lines", len(saved))
+	}
+	m2 := bootstrap.OpenManager(bootstrap.ManagerConfig{Custom: saved, Now: func() time.Time { return testNow }})
+	if got := m2.Custom(); len(got) != 1 || got[0].Entry.Line != listA {
+		t.Fatalf("custom entry lost on restart: %+v", got)
+	}
+	if err := m.RemoveCustom(listA); err != nil || len(saved) != 0 {
+		t.Fatalf("remove: %v, saved %d", err, len(saved))
+	}
+}
+
 func TestManagerEmptyBuiltinOnSourceBuild(t *testing.T) {
 	m := bootstrap.OpenManager(bootstrap.ManagerConfig{Now: func() time.Time { return testNow }})
 	if len(m.Builtin()) != 0 || len(m.Entries()) != 0 {
