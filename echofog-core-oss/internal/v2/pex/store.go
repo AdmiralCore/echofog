@@ -52,6 +52,10 @@ type Options struct {
 	// MaxNew and MaxTried override the table caps (tests).
 	MaxNew   int
 	MaxTried int
+	// AllowNonRoutable keeps cards with a loopback, private, link-local, CGNAT, ULA or
+	// documentation address (the lab and explicit LAN modes). Off by default: a card chosen by
+	// whoever answered PEX must not make the node probe its own network (services.md §3).
+	AllowNonRoutable bool
 }
 
 // entry is one candidate known to the node.
