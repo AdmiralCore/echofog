@@ -21,7 +21,9 @@ opening a stream with `OPEN{service, version}` ([wire.md](wire.md) §6.3); its f
   fields and UNSUPPORTED never do.
 - Every limit below is per session unless stated; nodes also apply the same limits per network
   diversity unit (IPv4 /24, IPv6 /32; [dht.md](dht.md) §1) with a factor of 3, and per authenticated
-  node ID per day where stated, so new sessions do not reset quotas.
+  node ID per day where stated, so new sessions do not reset quotas. The factor of 3 is part of the
+  **rate** limits too, not only of the stored-data quotas: a message charged against a diversity
+  unit costs three times its unit price, so a new session cannot multiply the rate one unit may use.
 - Text forms: `dht/2`, `pex/2`, `chat/2`, `mailbox/2`, `relay/2`, `exit/2`, `files/2`, `call/2`, `cluster/2` ([cluster.md](cluster.md)).
 
 ## 2. dht/2 (service 1)
@@ -143,10 +145,18 @@ The ratchet plaintext is v1's `PersonalMessageProto` with two new fields:
 
 ### 4.4 Rules
 
+- **Sender.** In this section a *sender* is an **authenticated** sender: either the authenticated
+  peer of the session the envelope arrived on, or a sender whose envelope decrypted and
+  authenticated under a ratchet or an init it proved to hold. The sealed `Inner.sender` and
+  `Inner.device` fields name a sender; they never authenticate one. Refusals of envelopes from an
+  unauthenticated sender are kept in one bounded refusal table per named device, shared by every
+  refusal path; they never start a fresh PQXDH session, never replace the current or the previous
+  session, and never produce a `Reset`. A `reset` control is honoured only when it arrives inside a
+  message that opened; a v2 node sends no `Reset` in response to an unauthenticated refusal.
 - Replays and undecryptable duplicates are dropped silently; a decryption failure never deletes a
-  session or triggers a reset (K8). If three distinct messages from one sender fail within 10 minutes,
-  the receiver fetches the sender's prekeys and starts a fresh PQXDH session itself; the old session is
-  kept 7 days for late messages.
+  session or triggers a reset (K8). If three distinct messages from one authenticated sender fail
+  within 10 minutes, the receiver fetches the sender's prekeys and starts a fresh PQXDH session
+  itself; the old session is kept 7 days for late messages.
 - Every v2 bundle has a KEM prekey and every init MUST use it; a classic X3DH init is refused (no
   downgrade window; audit P1). The label `FOG_X3DH_V2` is therefore retired in v2.
 - DELIVER: 20/s per session. BUNDLE_GET: 2 per minute per session, direct sessions only.
@@ -176,6 +186,27 @@ Store-and-forward with two hops: the sender's **forwarding relay** F is not the 
 
 Timeouts: QUEUE_CREATE 10 s, DEPOSIT 10 s, FORWARD 20 s, FETCH `wait` + 5 s, ACK 10 s.
 
+**Refusals (AD20).** An **external sender** is one whose identity the relay cannot authenticate: a
+first contact depositing into a public queue, or a sender hidden behind a forwarding relay. To an
+external sender, "no such queue", "queue full" and "queue policy" are one and the same answer:
+`DEPOSITED{status = 4}` (`refused`), with the same timing. The other values are reserved for such a
+sender: a relay MUST NOT send 1, 2, 5 or 6 to one, and a sender that receives one treats it as 4
+`refused`. Status 3 (`too-large`) may be sent because the sender already knows the size of its own
+blob. Inside an authenticated path the values keep their meaning. A proof of work below the threshold
+is `ERROR{0x100 pow-invalid}` only on an authenticated path; an external sender gets the same
+`refused`.
+
+| Condition | Wire status | External sender sees |
+|---|---|---|
+| stored | 0 `stored` | 0 |
+| no such queue | 1 `unknown-queue` | 4 `refused` |
+| queue full or over quota | 2 `full` | 4 `refused` |
+| blob over the limit | 3 `too-large` | 3 |
+| policy or bad queue auth | 4 `refused` | 4 `refused` |
+| proof of work below the threshold | `ERROR{0x100 pow-invalid}` | 4 `refused` |
+| forwarding relay cannot reach the mailbox relay | 5 `relay-unreachable` | 4 `refused` |
+| proof of work required but absent | 6 `pow-required` | 4 `refused` |
+
 ### 5.2 Queues
 
 - The recipient creates queues on its mailbox relays: random 16-byte `queue`, an Ed25519 `auth_key`
@@ -193,6 +224,10 @@ Timeouts: QUEUE_CREATE 10 s, DEPOSIT 10 s, FORWARD 20 s, FETCH `wait` + 5 s, ACK
   tokens are added later.
   A public queue holds at most 100 items and 2 MiB, separate from private queues, so a flood of first
   contacts never blocks contacts' mail.
+- **Deduplication.** A direct `DEPOSIT` is deduplicated by the envelope: the relay keeps a key over
+  `queue` and `SHA-256(blob)` (equivalently the PoW tuple, since `pow` commits to both) for the
+  item's lifetime. A repeat of the same blob with the same valid work is answered `stored` and adds
+  no second item. One proof of work therefore buys at most one queue slot.
 
 ### 5.3 Delivery
 
@@ -209,12 +244,16 @@ Timeouts: QUEUE_CREATE 10 s, DEPOSIT 10 s, FORWARD 20 s, FETCH `wait` + 5 s, ACK
    and F never dials private, loopback, link-local or reserved addresses from it; F makes at most 10
    new dials per minute for one sender session. F opens mailbox/2 on its session with M and sends the
    same `FORWARD`. M recognises `relay = self`, opens `sealed`, and stores the deposit. The result flows
-   back as `DEPOSITED` through F.
+   back as `DEPOSITED` through F. F passes the status through unchanged; the refusal rule of §5.1
+   applies end to end, so an external sender sees the same `refused` for no queue, full and policy.
 3. M keeps `SHA-256(sealed)` for 7 days; a repeated `sealed` is answered `stored` without storing a
    second copy (replays by F or an on-path party add nothing).
 4. The recipient fetches with `FETCH` (long-poll: `wait` ≤ 60 s) and deletes with `ACK` only after it
    has processed the items. Unacknowledged items stay until their 7-day expiry (K9: v1 deleted on push
-   without a receipt).
+   without a receipt). The receiver's local `holdFor` of at most 1 hour bounds one delivery attempt
+   only; it is **not** the item lifetime. An item that the handler did not process (a transient
+   failure) is not ACKed and stays for a later attempt until the 7-day expiry; only processed items
+   are deleted.
 5. One hop only: M never forwards a deposit further. There is no random walk (K9).
 
 ### 5.4 Limits
@@ -448,8 +487,18 @@ outside the call see neither (P8).
   originator's identity: `sig = Ed25519(origin key, "echofog/call2/signal" ‖ body)`, over the exact bytes
   (P8: v1 signed a re-serialised JSON). Hop-local signals (ping, NACK) are authenticated by the session
   and carry no signature.
-- A **join** signal carries the joiner's per-call media signing key (a fresh Ed25519 key per join) and
-  a fresh 16-byte `join_salt`.
+- A **join** is sent **unicast to the call's coordinator** over the joiner's session; it is not
+  flooded room-wide. Only the actions marked as flooded (tree manifest, coordinator heartbeat,
+  stream announce and close, tree update, coordinator election, VAD state) travel over the voice
+  tree, and those are forwarded and signed. A join is signed as well because the coordinator may
+  relay it, but it stays a single unicast request to the coordinator.
+- A join signal carries the joiner's **per-call** media signing key (a fresh Ed25519 key per call,
+  not per join) and a fresh 16-byte `join_salt`. A rejoin in the same call reuses the call's signing
+  key; the new `join_salt` still gives a new encryption key (§9.2).
+- `msg_id = 0` is invalid: a signal that carries it is dropped, not deduplicated.
+- Timestamps and the replay windows of call signals use the **corrected** clock — the offset of
+  [handshake.md](handshake.md) §7 — not the raw clock. The handshake and card checks keep using the
+  raw clock; only call signalling applies the offset.
 - `CALL_SIGNAL` datagrams duplicate lossy signals (NACK, reports) for low latency. Timeout for
   request-like signals: 2 s.
 
@@ -481,6 +530,9 @@ kind(u8) ‖ epoch(u8) ‖ sender(u8) ‖ stream(u8) ‖ gen(u8) ‖ seq(u32) �
   before any XOR or check, and sets its own on departure. It is not authenticated; a receiver only reads it.
   A false cap from a relay is no worse than the relay's ability to cut layers. The cap bits are outside
   `header_i` and the AAD, so they never change a tag.
+- **Datagram size.** The call media ceiling stays **1232 bytes** per datagram in v2.0, as in the
+  runtime's `MaxDatagram`. The 1242-byte media budget is not adopted here: 1232 stands until the TEO
+  decides the wire budget, and a sender does not raise it in the meantime.
 
 ### 9.3 Batched source authentication
 
@@ -544,6 +596,11 @@ are the same bytes as the AAD of §9.2.
   switch the sender closes its current batch and sends its CALL_AUTH before the first unit of the new epoch.
   `gen` distinguishes a re-entry of the same sender within the same epoch; with the per-join `join_salt`
   it keeps keys and nonces apart (§9.2).
+- **Interim v1 media (0.3.0).** Until T9.3c connects media v3 to the runtime, the product sends media
+  format v1 inside SEALED sessions and has no handler for `CALL_AUTH`. A node in that state
+  **discards** an incoming `CALL_AUTH` (0x13) datagram; it must not pass it to the application as
+  media or treat it as a signal. [security.md](security.md) §4.26 describes the interim v1 per-unit
+  signature and the remaining forgery window.
 - NACK retransmissions have a budget per child (at most 2× the child's recent receive rate); claimed
   relay capacity is capped by measured upload (P1).
 - Later: MLS epochs (`mls`), SFrame-style headers, a constant-rate shaping profile for calls (P9), a

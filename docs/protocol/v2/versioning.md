@@ -214,6 +214,11 @@ Rules:
 - A node applies a manifest only if it is valid under the current key set (threshold, objects.md §9),
   its `released_at` is later than that of the last applied manifest and not more than one day in the
   future, and its `not_after` has not passed.
+- **Absence is a prohibition.** A manifest defines the whole policy set. A component that the latest
+  applied manifest does not name has no effective policy and is **not permitted** (fail-closed): no
+  earlier policy is revived, and peers that use that component are refused. The never-lock-out rules
+  below still protect the version the reading node runs itself. A publisher that wants a component to
+  stay allowed must name it in every manifest.
 - **Never lock out.** A manifest never makes a node refuse the versions it runs itself:
   - `min_supported` and `deprecated_after` refusals apply only to peer versions strictly **below the
     reading node's own** version of that component; an entry that would cover the node's own version is
