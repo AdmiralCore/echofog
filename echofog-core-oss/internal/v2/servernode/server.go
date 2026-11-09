@@ -407,7 +407,7 @@ func cardListener(l ListenSpec, mask []byte, cover, path string) (cards.Listener
 		if host == "" {
 			return cards.Listener{}, errors.New("ws2 needs a cover domain")
 		}
-		cl.URL = "wss://" + host + path
+		cl.URL = "wss://" + cover + path
 		cl.SNI = host
 		return cl, nil
 	}
@@ -519,13 +519,13 @@ func tokenAddr(l ListenSpec) string {
 	return net.JoinHostPort(l.Advertise, port)
 }
 
-// ws2TokenAddr is the address a ws2 token binds to: the CDN-facing host and 443.
+// ws2TokenAddr is the address a ws2 token binds to: the CDN-facing host and port of the cover.
 func ws2TokenAddr(cover string) string {
-	host := coverHost(cover)
-	if host == "" {
+	host, port, err := net.SplitHostPort(cover)
+	if err != nil || host == "" || port == "" {
 		return ""
 	}
-	return net.JoinHostPort(host, "443")
+	return net.JoinHostPort(host, port)
 }
 
 // Open opens the profile of dataDir and builds the runtime without starting it.
