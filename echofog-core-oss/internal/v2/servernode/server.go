@@ -24,12 +24,15 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/hkdf"
+
 	"github.com/echofog/echofog-core/internal/v2/access"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/noise3"
 	"github.com/echofog/echofog-core/internal/v2/carrier/reality2"
 	"github.com/echofog/echofog-core/internal/v2/clock"
 	"github.com/echofog/echofog-core/internal/v2/identity"
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -488,6 +491,21 @@ func realityMask(priv []byte) (reality2.MaskKey, error) {
 	return reality2.MaskKey{Private: k}, nil
 }
 
+// coverMaskLabel separates the masking key of the camouflaged listeners from the profile's
+// masking key, which noise3 uses. wire.md §2.1: noise3 keys are never published; the public card
+// carries the camouflaged key alone.
+const coverMaskLabel = "echofog/v2/cover-mask"
+
+// deriveCoverMask derives the masking key of the camouflaged carriers (reality2, ws2) from the
+// profile's masking key. It is stable across restarts and independent of the noise3 key.
+func deriveCoverMask(mask []byte) ([]byte, error) {
+	out := make([]byte, 32)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, mask, nil, []byte(coverMaskLabel)), out); err != nil {
+		return nil, fmt.Errorf("cover masking key: %w", err)
+	}
+	return out, nil
+}
+
 // tokenAddr is the exact host:port a card advertises for a listener; tokens bind to it.
 func tokenAddr(l ListenSpec) string {
 	_, port, err := net.SplitHostPort(l.Bind)
@@ -566,16 +584,31 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 	if err != nil {
 		return nil, err
 	}
+	// The camouflaged carriers use their own masking key: the public card publishes it, and the
+	// profile's key (which noise3 accepts) must never leave the node (wire.md §2.1).
+	coverPriv, err := deriveCoverMask(maskPriv)
+	if err != nil {
+		return nil, err
+	}
+	coverKey, err := ecdh.X25519().NewPrivateKey(coverPriv)
+	if err != nil {
+		return nil, err
+	}
+	coverPub := keys.New(keys.X25519, coverKey.PublicKey().Bytes())
 	var coverCert *tls.Certificate
 	if cfg.CoverCert != "" {
 		if coverCert, err = loadCoverCert(cfg.CoverCert); err != nil {
 			return nil, err
 		}
 	}
-	path := ws2Path(maskPriv)
+	path := ws2Path(coverPriv)
 	var cardListeners []cards.Listener
 	for _, l := range cfg.Listen {
-		cl, err := cardListener(l, maskPub, cfg.Cover, path)
+		mask := maskPub
+		if l.Suite != "noise3" {
+			mask = coverPub
+		}
+		cl, err := cardListener(l, mask, cfg.Cover, path)
 		if err != nil {
 			return nil, err
 		}
@@ -625,7 +658,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 			}
 			seenReality[l.Bind] = true
 			tcpBind, udpBind := realityBinds(cfg.Listen, l.Bind)
-			mk, err := realityMask(maskPriv)
+			mk, err := realityMask(coverPriv)
 			if err != nil {
 				return nil, err
 			}
@@ -638,7 +671,7 @@ func Open(ctx context.Context, dataDir string, log *slog.Logger) (*Server, error
 			}
 			sources = append(sources, src)
 		case "ws2":
-			mk, err := realityMask(maskPriv)
+			mk, err := realityMask(coverPriv)
 			if err != nil {
 				return nil, err
 			}
