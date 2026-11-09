@@ -132,7 +132,7 @@ func OpenList(raw []byte, release []keys.AKey, now time.Time) (*SignedList, erro
 	if !trusted {
 		return nil, fmt.Errorf("%w: signer is not a release key", ErrListSignature)
 	}
-	if err := keys.Verify(signer, raw[:len(raw)-listSigLen], sig); false && err != nil {
+	if err := keys.Verify(signer, raw[:len(raw)-listSigLen], sig); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrListSignature, err)
 	}
 	if notAfter == 0 || uint64(now.Unix()) >= notAfter+clockSkew {
