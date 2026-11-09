@@ -477,6 +477,25 @@ func dedupeKey(hash []byte) []byte {
 	return append(out, hash...)
 }
 
+// directDedupeKey is the memory of a direct DEPOSIT into a public queue: it commits to the queue and
+// to SHA-256(blob), so one proof of work buys one slot (services.md 5.2). It is separate from the
+// FORWARD memory, which commits to the sealed bytes.
+func directDedupeKey(queue, blob []byte) []byte {
+	sum := sha256.Sum256(blob)
+	h := sha256.New()
+	_, _ = h.Write([]byte("echofog/mailbox2/deposit-dedupe"))
+	_, _ = h.Write(queue)
+	_, _ = h.Write(sum[:])
+	return append([]byte("p/"), h.Sum(nil)...)
+}
+
+// dedupeExpiry is the logical lifetime of a direct-deposit memory: its item's expiry.
+func dedupeExpiry(expires int64) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(expires))
+	return b
+}
+
 func ownerPrefix(opaque []byte) []byte {
 	out := make([]byte, 0, 2+len(opaque)+1)
 	out = append(out, "o/"...)
@@ -620,8 +639,10 @@ func (s *Server) CreateQueue(p Peer, m QueueCreate) (uint64, error) {
 }
 
 // Deposit stores one blob in a queue. It returns the DEPOSITED status and, when stored, the item
-// id. A proof of work below the queue's threshold is ErrPowInvalid (ERROR 0x100); a missing one is
-// StatusPowRequired.
+// id. A public queue is the first-contact path, so its sender is external: a bad proof of work gets
+// the same StatusRefused as every other refusal of an external sender (AD20, decision Q4); a
+// missing one is StatusPowRequired. A direct deposit into a public queue is deduplicated by the
+// envelope, so one proof of work buys one slot (services.md 5.2).
 func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 	if len(m.Queue) != QueueSize {
 		return StatusUnknownQueue, nil, nil
@@ -653,7 +674,26 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 		if m.Pow == 0 {
 			return StatusPowRequired, nil, nil
 		}
-		return StatusRefused, nil, ErrPowInvalid
+		return StatusRefused, nil, nil
+	}
+
+	// One blob, one slot: a repeat with valid work is answered stored without a second item for the
+	// item's lifetime (services.md 5.2). The value is the logical expiry, so the store TTL is only a
+	// backstop (AD19) and a test clock can move past it.
+	var dedupe []byte
+	if rec.Public {
+		dedupe = directDedupeKey(m.Queue, m.Blob)
+		raw, err := s.cfg.Store.Get(dedupe)
+		switch {
+		case err == nil:
+			if len(raw) == 8 && now.UnixNano() < int64(binary.BigEndian.Uint64(raw)) {
+				s.mu.Unlock()
+				return StatusStored, nil, nil
+			}
+		case !errors.Is(err, store.ErrNotFound):
+			s.mu.Unlock()
+			return 0, nil, err
+		}
 	}
 
 	items, bytes := s.queueLimits(rec)
@@ -710,7 +750,22 @@ func (s *Server) Deposit(p Peer, m Deposit) (uint32, []byte, error) {
 		s.mu.Unlock()
 		return 0, nil, err
 	}
+	if dedupe != nil {
+		if err := s.cfg.Store.PutTTL(dedupe, dedupeExpiry(expires), s.lim.ItemTTL+storeGrace); err != nil {
+			_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
+			rec.Count--
+			rec.Bytes -= int64(len(m.Blob))
+			_ = s.putQueueLocked(m.Queue, rec, now)
+			_ = s.cfg.Store.Delete(itemKey(m.Queue, id))
+			_ = s.cfg.Store.Delete(indexKey)
+			s.mu.Unlock()
+			return 0, nil, err
+		}
+	}
 	if err := s.quotaAddLocked(now, p, 1, uint64(len(m.Blob))); err != nil {
+		if dedupe != nil {
+			_ = s.cfg.Store.Delete(dedupe)
+		}
 		_ = s.addTotalLocked(rec.Public, -1, -int64(len(m.Blob)))
 		rec.Count--
 		rec.Bytes -= int64(len(m.Blob))
