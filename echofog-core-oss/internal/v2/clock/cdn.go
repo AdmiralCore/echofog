@@ -60,10 +60,10 @@ var defaultEndpoints = []string{
 // is configuration, not protocol: users and distributions may replace it.
 func DefaultEndpoints() []string { return slices.Clone(defaultEndpoints) }
 
-// HTTPClient is the single HTTP surface the CDN check needs. In production it is
-// node.Host.HTTP (02-architecture §3.1): one client with browser-shaped TLS that, in
-// anonymous mode, routes requests through the node's proxy. The clock never builds or
-// inspects a transport, so *http.Client satisfies the interface.
+// HTTPClient is the single HTTP surface the CDN check needs. Production passes the client
+// NewHTTPClient builds: browser-shaped TLS that, in anonymous mode, routes requests
+// through the node's proxy (02-architecture §3.1). *http.Client satisfies the interface,
+// and tests inject a fake.
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -136,7 +136,12 @@ func NewHTTPClient(proxy *url.URL, timeout time.Duration) *http.Client {
 		}
 		stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 		defer stop()
-		uc := utls.UClient(raw, &utls.Config{ServerName: host, RootCAs: tr.TLSClientConfig.RootCAs}, utls.HelloCustom)
+		tcfg := tr.TLSClientConfig
+		uc := utls.UClient(raw, &utls.Config{
+			ServerName: host,
+			RootCAs:    tcfg.RootCAs,
+			MinVersion: tcfg.MinVersion,
+		}, utls.HelloCustom)
 		if err := uc.ApplyPreset(&spec); err != nil {
 			_ = raw.Close()
 			return nil, err
