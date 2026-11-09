@@ -152,6 +152,7 @@ type Service struct {
 	cfg ServiceConfig
 
 	tickMu sync.Mutex // one Tick at a time
+	dirMu  sync.Mutex // one directory lookup for a cache miss at a time
 
 	mu    sync.Mutex
 	items map[[16]byte]*item
@@ -164,8 +165,12 @@ type Service struct {
 	// remembered incoming IDs: in all and by sender device
 	seenN   int
 	seenDev map[[32]byte]int
-	// lookups of accounts that failed, until when they are not tried again (finding 6)
-	lookupFail map[lookupKey]time.Time
+	// resolveCache answers incoming init envelopes for an account: one DHT search per contact per
+	// resolveCacheTTL (ЧМ-2).
+	resolveCache map[[32]byte]resolveEntry
+	// resolveAt holds the incoming lookups of the current window: the incoming flow has a budget
+	// (bounded amplification, ЧМ-2).
+	resolveAt []time.Time
 	// unauth counts refusals of envelopes whose sender is not authenticated (a sealed envelope can
 	// be made by anybody). It is bounded bookkeeping only: it never starts a reset (ЧМ-1).
 	unauth map[[32]byte][]failure
@@ -182,8 +187,12 @@ type failure struct {
 	node [32]byte // the account the envelope named
 }
 
-// lookupKey is an (account, device) pair named by an incoming init.
-type lookupKey struct{ node, device [32]byte }
+// resolveEntry is the remembered answer of one incoming directory lookup.
+type resolveEntry struct {
+	res *dht.Resolved
+	err error
+	at  time.Time
+}
 
 // item is one outgoing message in the outbox.
 type item struct {
@@ -241,7 +250,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		return nil, errors.New("chat: Crypto, Dir, Link, Store and Now are required")
 	}
 	s := &Service{cfg: cfg, items: map[[16]byte]*item{},
-		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, lookupFail: map[lookupKey]time.Time{},
+		perPeer: map[[32]byte]int{}, receipts: map[[32]byte]int{}, seenDev: map[[32]byte]int{}, resolveCache: map[[32]byte]resolveEntry{},
 		unauth: map[[32]byte][]failure{}, fresh: map[[32]byte]bool{}}
 	var after []byte
 	for {
@@ -379,11 +388,6 @@ func (s *Service) Tick(ctx context.Context) error {
 			failed = append(failed, it)
 		case it.Next <= now.UnixNano():
 			due = append(due, it)
-		}
-	}
-	for k, until := range s.lookupFail {
-		if !now.Before(until) {
-			delete(s.lookupFail, k)
 		}
 	}
 	s.mu.Unlock()
@@ -626,15 +630,11 @@ func (s *Service) receive(ctx context.Context, envelope []byte) (status uint32, 
 
 	var plain []byte
 	if len(in.PqxdhInit) > 0 {
-		key := lookupKey{node, device}
-		if s.lookupFailed(key) {
-			return chatpb.StatusRefused, true
-		}
-		res, err := s.cfg.Dir.Resolve(ctx, node)
+		// The answer is remembered per account and the incoming flow has a budget: repeated init
+		// envelopes must not turn into repeated DHT searches that reveal whom the recipient is
+		// interested in (ЧМ-2).
+		res, err := s.resolveForIncoming(ctx, node)
 		if err != nil {
-			// only a failed lookup is remembered, per (account, device): an envelope that names a device
-			// the account does not have must not keep the account's real init out
-			s.noteLookupFailed(key)
 			return chatpb.StatusRefused, true
 		}
 		if res == nil || res.Devices == nil || res.Devices.NodeID != node {
@@ -769,23 +769,92 @@ func (s *Service) forceFresh(node [32]byte) {
 	}
 }
 
-// lookupPause is how long an account whose lookup failed is not looked up again for an incoming init.
-const lookupPause = time.Minute
+const (
+	// resolveCacheTTL is how long one answer serves incoming init envelopes for an account, and the
+	// window of the incoming lookup budget (ЧМ-2).
+	resolveCacheTTL = time.Minute
+	// resolveTimeoutFallback bounds one incoming lookup when the config gives no limit.
+	resolveTimeoutFallback = 5 * time.Second
+	// resolveBudgetFallback bounds the incoming lookups of one window when the config gives no limit.
+	resolveBudgetFallback = 120
+)
 
-func (s *Service) lookupFailed(key lookupKey) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	until, ok := s.lookupFail[key]
-	return ok && s.cfg.Now().Before(until)
+// errResolveLimited says the incoming flow spent its lookup budget for this window.
+var errResolveLimited = errors.New("chat: incoming directory lookups are limited")
+
+// resolveForIncoming finds an account named by an incoming init. An answer, including a failure,
+// is remembered for resolveCacheTTL, so a flood of envelopes for one contact causes at most one DHT
+// search per window: the DHT must not learn, beyond that, whom the recipient is interested in. The
+// lookup has a time limit of its own, and the whole incoming flow has a budget (ЧМ-2, bounded
+// amplification).
+func (s *Service) resolveForIncoming(ctx context.Context, node [32]byte) (*dht.Resolved, error) {
+	if res, err, ok := s.cachedResolve(node); ok {
+		return res, err
+	}
+	// One cache miss at a time: two inits for one account must not become two searches.
+	s.dirMu.Lock()
+	defer s.dirMu.Unlock()
+	if res, err, ok := s.cachedResolve(node); ok {
+		return res, err
+	}
+	if !s.takeResolveSlot() {
+		return nil, errResolveLimited
+	}
+	timeout := s.cfg.ResolveTimeout
+	if timeout <= 0 {
+		timeout = resolveTimeoutFallback
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	res, err := s.cfg.Dir.Resolve(rctx, node)
+	s.cacheResolve(node, res, err)
+	return res, err
 }
 
-func (s *Service) noteLookupFailed(key lookupKey) {
+func (s *Service) cachedResolve(node [32]byte) (*dht.Resolved, error, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.lookupFail[key]; !ok && len(s.lookupFail) >= maxTrackedDevices {
-		return // full: skip remembering, never grow
+	e, ok := s.resolveCache[node]
+	if !ok || !s.cfg.Now().Before(e.at.Add(resolveCacheTTL)) {
+		return nil, nil, false
 	}
-	s.lookupFail[key] = s.cfg.Now().Add(lookupPause)
+	return e.res, e.err, true
+}
+
+func (s *Service) cacheResolve(node [32]byte, res *dht.Resolved, err error) {
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.resolveCache[node]; !ok && len(s.resolveCache) >= maxTrackedDevices {
+		for k := range s.resolveCache { // full: forget an arbitrary entry, never grow
+			delete(s.resolveCache, k)
+			break
+		}
+	}
+	s.resolveCache[node] = resolveEntry{res: res, err: err, at: now}
+}
+
+// takeResolveSlot spends one lookup of the incoming flow's window.
+func (s *Service) takeResolveSlot() bool {
+	now := s.cfg.Now()
+	limit := s.cfg.MaxResolvePerMinute
+	if limit <= 0 {
+		limit = resolveBudgetFallback
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.resolveAt[:0:0]
+	for _, at := range s.resolveAt {
+		if now.Sub(at) < resolveCacheTTL {
+			kept = append(kept, at)
+		}
+	}
+	s.resolveAt = kept
+	if len(s.resolveAt) >= limit {
+		return false
+	}
+	s.resolveAt = append(s.resolveAt, now)
+	return true
 }
 
 // noteUnauthenticated records a refusal of an envelope whose sender is not authenticated. An
