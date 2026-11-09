@@ -104,9 +104,9 @@ func TestSignedListRoundTrip(t *testing.T) {
 		t.Fatalf("device entry lost: %+v", l.Entries[1])
 	}
 
-	// a changed byte breaks the signature
+	// a changed body byte breaks the signature
 	bad := append([]byte(nil), raw...)
-	bad[40] ^= 0xff
+	bad[listBodyAt()] ^= 0x01
 	if _, err := bootstrap.OpenList(bad, []keys.AKey{s.Public()}, testNow); !errors.Is(err, bootstrap.ErrListSignature) {
 		t.Fatalf("forged list: %v", err)
 	}
