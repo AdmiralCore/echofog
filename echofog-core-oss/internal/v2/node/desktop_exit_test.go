@@ -156,7 +156,10 @@ func httpGet(t *testing.T, c net.Conn) string {
 	t.Helper()
 	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
 	if _, err := fmt.Fprint(c, "GET / HTTP/1.0\r\nHost: site\r\n\r\n"); err != nil {
-		t.Fatal(err)
+		// The exit may close the stream before the request arrives: a refusal it has already sent,
+		// or a tunnel ended from the far side. There is no answer to read then, which is not the
+		// page and not a failure of the test.
+		return ""
 	}
 	r := bufio.NewReader(c)
 	var last string
