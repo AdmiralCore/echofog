@@ -71,6 +71,37 @@ func lessVer(a, b []int) bool {
 	return len(a) < len(b)
 }
 
+// storedSample is one sample read from testdata with the Chrome version it was taken from.
+type storedSample struct {
+	Version string
+	Sample  *Sample
+}
+
+// selectSample picks the stored sample to compare a live Chrome of version live with. Only the
+// same version is evidence about the installed browser: within one major version the newest
+// stored sample is the closest one, and a sample of another major is the newest of all. exact
+// reports the first case. A missing sample is a fault for the caller, not a licence to skip.
+func selectSample(stored []storedSample, live string) (s *Sample, version string, exact bool) {
+	return nil, "", false
+}
+
+// liveCheck is what one live capture proves: our profile against the installed Chrome, which is
+// always checked, the drift line when the stored sample is of another version, and the installed
+// Chrome against the stored sample of the same version.
+type liveCheck struct {
+	Divergences []string
+	Drift       string
+	Stored      []string
+}
+
+// checkLive compares our profile with the installed Chrome and, only when the stored sample is
+// of the same version, the installed Chrome with that sample. A different version says nothing
+// about the installed browser's hello: the drift is reported and only the stored comparison is
+// skipped.
+func checkLive(stored []storedSample, liveVersion string, live, ours *Sample) liveCheck {
+	return liveCheck{}
+}
+
 func loadKnown(t *testing.T) known {
 	t.Helper()
 	var k known
@@ -228,4 +259,115 @@ func TestLiveChrome(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSelectSample pins the choice of the stored sample: the exact version, the closest one of
+// the same major when only the build differs, the newest one when the major is gone, and nothing
+// when testdata is empty.
+func TestSelectSample(t *testing.T) {
+	s := func(ja4 string) *Sample { return &Sample{Source: "chrome", Transport: "tcp", JA4: ja4} }
+	cases := []struct {
+		name   string
+		stored []storedSample
+		live   string
+		want   string
+		exact  bool
+	}{
+		{
+			name: "exact version",
+			stored: []storedSample{
+				{Version: "156.0.8078.81", Sample: s("a")},
+				{Version: "157.0.1.1", Sample: s("b")},
+			},
+			live: "156.0.8078.81", want: "156.0.8078.81", exact: true,
+		},
+		{
+			name:   "another build of the same major",
+			stored: []storedSample{{Version: "156.0.8078.81", Sample: s("a")}},
+			live:   "156.0.8078.79", want: "156.0.8078.81",
+		},
+		{
+			name: "same major beats a newer major",
+			stored: []storedSample{
+				{Version: "155.0.9.9", Sample: s("a")},
+				{Version: "156.0.8078.81", Sample: s("b")},
+				{Version: "157.0.1.1", Sample: s("c")},
+			},
+			live: "156.0.8078.79", want: "156.0.8078.81",
+		},
+		{
+			name: "no sample of this major",
+			stored: []storedSample{
+				{Version: "155.0.9.9", Sample: s("a")},
+				{Version: "157.0.1.1", Sample: s("b")},
+			},
+			live: "156.0.8078.79", want: "157.0.1.1",
+		},
+		{
+			name: "no stored sample at all",
+			live: "156.0.8078.79",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, version, exact := selectSample(tc.stored, tc.live)
+			if version != tc.want || exact != tc.exact {
+				t.Fatalf("selectSample = %q exact=%v, want %q exact=%v", version, exact, tc.want, tc.exact)
+			}
+			if (got == nil) != (tc.want == "") {
+				t.Fatalf("selectSample returned sample %v for version %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckLive pins what a live capture proves: the version drift never excuses our profile from
+// the comparison with the installed Chrome, and a sample of another version is not compared as if
+// it described that Chrome.
+func TestCheckLive(t *testing.T) {
+	storedLive := &Sample{Source: "chrome", Transport: "tcp", JA4: "stored"}
+	installed := &Sample{Source: "chrome", Transport: "tcp", JA4: "installed"}
+	ours := &Sample{Source: "ours", Transport: "tcp", JA4: "ours"}
+
+	t.Run("same version compares both layers", func(t *testing.T) {
+		res := checkLive([]storedSample{{Version: "156.0.8078.81", Sample: storedLive}}, "156.0.8078.81", installed, ours)
+		if res.Drift != "" {
+			t.Fatalf("drift reported for the same version: %s", res.Drift)
+		}
+		if len(res.Divergences) != 1 {
+			t.Fatalf("our profile was not compared with the live Chrome: %v", res.Divergences)
+		}
+		if len(res.Stored) != 1 {
+			t.Fatalf("the live Chrome was not compared with the stored sample: %v", res.Stored)
+		}
+	})
+
+	t.Run("another build reports drift and keeps the live comparison", func(t *testing.T) {
+		res := checkLive([]storedSample{{Version: "156.0.8078.81", Sample: storedLive}}, "156.0.8078.79", installed, ours)
+		if res.Drift == "" {
+			t.Fatal("a stored sample of another version was not reported as drift")
+		}
+		if !strings.Contains(res.Drift, "156.0.8078.81") || !strings.Contains(res.Drift, "156.0.8078.79") {
+			t.Fatalf("the drift line names neither version: %s", res.Drift)
+		}
+		if len(res.Divergences) != 1 {
+			t.Fatalf("a version drift skipped our profile against the live Chrome: %v", res.Divergences)
+		}
+		if len(res.Stored) != 0 {
+			t.Fatalf("a sample of another version was compared as the live browser: %v", res.Stored)
+		}
+	})
+
+	t.Run("no stored sample", func(t *testing.T) {
+		res := checkLive(nil, "156.0.8078.79", installed, ours)
+		if res.Drift == "" {
+			t.Fatal("a missing stored sample was not reported")
+		}
+		if len(res.Divergences) != 1 {
+			t.Fatalf("a missing stored sample skipped our profile against the live Chrome: %v", res.Divergences)
+		}
+		if len(res.Stored) != 0 {
+			t.Fatalf("a missing stored sample produced a stored comparison: %v", res.Stored)
+		}
+	})
 }
