@@ -35,8 +35,6 @@
   export let conv;
   /** back: show a back arrow (narrow window, the list is hidden) */
   export let back = false;
-  /** which side column the head's button hides: 'personal' for a one-to-one chat in the list ('' none) */
-  export let panelButton = '';
   /** stage: a call's stage is in the default slot, between the channels and the chat; chatOpen: the chat
    *  beside it is shown; theatre: the stage takes everything (no channels, no chat) */
   export let stage = false;
@@ -312,7 +310,7 @@
   {/if}
   {#if stage}<div class="stage-slot"><slot {compact} toggleChannels={() => (chansOpen = !chansOpen)} /></div>{/if}
   <div class="main">
-    <ChatHeader {conv} {back} panelButton={conv.kind === 'group' ? 'space' : panelButton} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}

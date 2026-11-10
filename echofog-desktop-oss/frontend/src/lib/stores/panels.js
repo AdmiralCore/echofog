@@ -33,7 +33,12 @@ export function togglePanel(kind) {
 
 export const isPanelHidden = (kind) => get(panelHidden[kind]);
 
+/**
+ * The "you" card stands at the foot of the personal list and the rail holds one too: two avatars with
+ * the same name would say it twice. The list reports its own card here, and the rail keeps its card
+ * only while that report is false.
+ */
 export const selfCardShown = writable(false);
 
-// TODO: the rule, not its placeholder
-export const selfCardOnScreen = () => false;
+/** Whether a column on screen carries the "you" card: only the personal list does. */
+export const selfCardOnScreen = (view, showAside, hidden) => view === 'chats' && showAside && !hidden;

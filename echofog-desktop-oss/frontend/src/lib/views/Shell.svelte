@@ -11,6 +11,7 @@
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
   import { loadPeerDirectory } from '../stores/peers.store.js';
   import { view, focus } from '../stores/nav.js';
+  import { selfCardShown } from '../stores/panels.js';
   import { anon, refreshAnon } from '../stores/anon.js';
   import { slide } from 'svelte/transition';
   import { netStatus } from '../stores/net.js';
@@ -246,20 +247,23 @@
             <span class="label">{$resolvedTheme === 'dark' ? $t('shell.darkTheme') : $t('shell.lightTheme')}</span>
           </button>
         </Tooltip>
-        <Menu items={avatarMenu} width={236} label={myName} on:select={menuPick}>
-          <button slot="trigger" let:toggle let:open class="me" class:active={$view === 'settings'} aria-haspopup="menu" aria-expanded={open}
-            title={`${myName} · ${statusText}${$anon && $anon.running && !$anon.broken ? ' · ' + $t('anon.badge.' + $anon.seenBy) : ''}`} on:click={toggle}>
-            <span class="av">
-              <Avatar id={$profile} name={myName} size={32} />
-              <span class="presence" class:on={online}></span>
-            </span>
-            <span class="who">
-              <span class="nm">{myName}</span>
-              <span class="st" class:on={online}>{statusText}</span>
-              {#if $anon && $anon.running && !$anon.broken}<span class="anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
-            </span>
-          </button>
-        </Menu>
+        <!-- the "you" card of the chat list stands on screen, so the rail does not repeat it -->
+        {#if !$selfCardShown}
+          <Menu items={avatarMenu} width={236} label={myName} on:select={menuPick}>
+            <button slot="trigger" let:toggle let:open class="me" class:active={$view === 'settings'} aria-haspopup="menu" aria-expanded={open}
+              title={`${myName} · ${statusText}${$anon && $anon.running && !$anon.broken ? ' · ' + $t('anon.badge.' + $anon.seenBy) : ''}`} on:click={toggle}>
+              <span class="av">
+                <Avatar id={$profile} name={myName} size={32} />
+                <span class="presence" class:on={online}></span>
+              </span>
+              <span class="who">
+                <span class="nm">{myName}</span>
+                <span class="st" class:on={online}>{statusText}</span>
+                {#if $anon && $anon.running && !$anon.broken}<span class="anon" title={$t('anon.now.' + $anon.seenBy)}><Icon name="eyeOff" size={12} /> {$t('anon.badge.' + $anon.seenBy)}</span>{/if}
+              </span>
+            </button>
+          </Menu>
+        {/if}
       </div>
     {/if}
   </nav>
