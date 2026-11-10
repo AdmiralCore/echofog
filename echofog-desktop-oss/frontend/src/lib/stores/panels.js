@@ -42,3 +42,12 @@ export const selfCardShown = writable(false);
 
 /** Whether a column on screen carries the "you" card: only the personal list does. */
 export const selfCardOnScreen = (view, showAside, hidden) => view === 'chats' && showAside && !hidden;
+
+export const selfCards = writable({ personal: false, space: false });
+
+// TODO: the rules, not their placeholders
+export const personalCardOnScreen = () => false;
+export const spaceCardOnScreen = () => false;
+export const railCardShown = () => false;
+export function setSelfCard() {}
+
