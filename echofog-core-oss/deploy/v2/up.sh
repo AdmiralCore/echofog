@@ -248,7 +248,9 @@ COMPOSE=deploy/v2/docker-compose.yml
 OVERRIDE=deploy/v2/docker-compose.up.yml
 ENVFILE=deploy/v2/.env
 
+ENV_PREEXISTED=0
 if [ -f "$ENVFILE" ]; then
+	ENV_PREEXISTED=1
 	existing=$(sed -n 's/^ECHOFOG_ADVERTISE_ADDR=//p' "$ENVFILE" | head -n 1)
 	if [ -n "$existing" ] && [ "$existing" != "$ADVERTISE" ]; then
 		die "$ENVFILE already names $existing: move it away or rerun with --advertise $existing"
@@ -361,10 +363,15 @@ wait_healthy() {
 }
 
 teardown() {
-	printf 'Teardown of the test run (removes the container, the volume and the generated files):\n'
+	printf 'Teardown of the test run (removes the container and the volume):\n'
 	printf '  %s\n' "$(dead down -v)"
 	printf '  docker volume rm -f %s\n' "$VOLUME"
-	printf '  rm -f %s %s\n' "$ENVFILE" "$OVERRIDE"
+	if [ "$ENV_PREEXISTED" = 0 ]; then
+		printf '  rm -f %s %s\n' "$ENVFILE" "$OVERRIDE"
+	else
+		printf '  %s was already there and now holds the test values: restore or remove it by hand.\n' "$ENVFILE"
+		printf '  rm -f %s\n' "$OVERRIDE"
+	fi
 }
 
 if [ "$DRY" = 1 ]; then
