@@ -16,8 +16,12 @@ so the set is compared. The ECH payload length is random and ignored.
 * `TestLiveChrome` — runs the installed stable Chrome headless (fresh profile, `--host-resolver-rules`
   mapping only a `.test` name to loopback, everything else unresolvable) against a loopback TCP/UDP
   server that records the ClientHello and the QUIC Initial. It takes three captures per transport,
-  requires them to agree, compares with our profile and with the stored sample. It skips with a reason
-  when no Chrome is found (`CHROME_BIN` overrides the search). Nothing leaves the machine.
+  requires them to agree, compares our profile with the live Chrome and, when the stored sample is of
+  the same version, the live Chrome with that sample. A stored sample of another version (a CI runner
+  lags or leads the machine that refreshed `testdata`) is logged as drift and skips only the
+  stored-sample comparison: our profile is still checked against the Chrome that is installed.
+  It skips with a reason when no Chrome is found (`CHROME_BIN` overrides the search). Nothing leaves
+  the machine.
 * `TestStaleProfileIsRed` — a Chrome 120 profile must not match the current sample.
 
 ## When a new stable Chrome comes out (about every 4 weeks) and before each EchoFog release
