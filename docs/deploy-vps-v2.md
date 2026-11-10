@@ -5,13 +5,34 @@
 This guide takes an empty server to a working EchoFog v2 node: a relay, a mailbox and a DHT server,
 optionally an exit. Every path, variable name and port here was checked against the files of the `v2`
 branch: `deploy/v2/.env.example`, `deploy/v2/docker-compose.yml`, `deploy/v2/entrypoint.sh`,
-`deploy/v2/Dockerfile` and `deploy/v2/install.sh`. All addresses are placeholders from the
-documentation ranges: `203.0.113.10` stands for the public address of your server.
+`deploy/v2/Dockerfile`, `deploy/v2/up.sh` and `deploy/v2/install.sh`. All addresses are placeholders
+from the documentation ranges: `203.0.113.10` stands for the public address of your server.
 
 The guide for protocol v1 is [deploy-vps.md](deploy-vps.md).
 
 > **Status.** Protocol v2 is the 0.3.0 line and still experimental: the code has had no independent
 > security audit yet. Do not put more TON into a node's wallet than you are ready to lose.
+
+## Quick start
+
+Three commands on a fresh Ubuntu or Debian server, from a root shell with Docker installed (section 3):
+
+```sh
+git clone --branch v2 --single-branch https://github.com/AdmiralCore/echofog.git && cd echofog/echofog-core-oss
+./deploy/v2/up.sh --advertise 203.0.113.10
+docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env exec node echofog-node v2 invite create --data /data --access 30d
+```
+
+`up.sh` writes `deploy/v2/.env` (mode 0600) with only the values that differ from the example, pulls the
+image, starts the node, waits for the healthcheck to report `healthy` and prints `v2 status --plain`, the
+path of the recovery phrase (`/data/recovery-phrase.txt` in the volume) and a ready invitation command.
+Add `--invites` for invitation links, `--cover node.example.org:443 --site /srv/echofog-site` for a
+public card, `--test` for a throwaway run on ports 8443 and 8444, and `--dry-run` to see every command
+first. Open 443/tcp and 443/udp in the firewall and in the provider's panel before expecting peers; the
+test run needs 8443 and 8444 instead.
+
+The rest of this guide is the same path with every step explained, and section 12 is the native
+installer.
 
 ## 1. What you get and what you need
 

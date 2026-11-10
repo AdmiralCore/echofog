@@ -5,14 +5,34 @@ English version: [deploy-vps-v2.md](deploy-vps-v2.md)
 Это полный путь от чистого сервера до работающей ноды EchoFog v2: ретранслятора, почтового ящика и
 DHT-сервера, при желании — с выходом. Все пути, имена переменных и порты сверены с файлами ветки
 `v2`: `deploy/v2/.env.example`, `deploy/v2/docker-compose.yml`, `deploy/v2/entrypoint.sh`,
-`deploy/v2/Dockerfile` и `deploy/v2/install.sh`. Все адреса — заглушки из документационных
-диапазонов: `203.0.113.10` означает публичный адрес сервера.
+`deploy/v2/Dockerfile`, `deploy/v2/up.sh` и `deploy/v2/install.sh`. Все адреса — заглушки из
+документационных диапазонов: `203.0.113.10` означает публичный адрес сервера.
 
 Руководство для протокола v1 — [deploy-vps.ru.md](deploy-vps.ru.md).
 
 > **Статус.** Протокол v2 — это линия 0.3.0, и она ещё экспериментальная: независимого аудита
 > безопасности сторонней организацией не было. Не держите в кошельке ноды больше TON, чем готовы
 > потерять.
+
+## Быстрый старт
+
+Три команды на чистом сервере Ubuntu или Debian, из root-оболочки с установленным Docker (раздел 3):
+
+```sh
+git clone --branch v2 --single-branch https://github.com/AdmiralCore/echofog.git && cd echofog/echofog-core-oss
+./deploy/v2/up.sh --advertise 203.0.113.10
+docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env exec node echofog-node v2 invite create --data /data --access 30d
+```
+
+`up.sh` пишет `deploy/v2/.env` (права 0600) только с теми значениями, которые отличаются от примера,
+скачивает образ, запускает ноду, ждёт состояния `healthy` от healthcheck и печатает `v2 status --plain`,
+путь к фразе восстановления (`/data/recovery-phrase.txt` в томе) и готовую команду приглашения.
+`--invites` включает ссылки-приглашения, `--cover node.example.org:443 --site /srv/echofog-site` —
+публичную карточку, `--test` — одноразовый запуск на портах 8443 и 8444, `--dry-run` показывает все
+команды заранее. Порты 443/tcp и 443/udp открываются в файрволе и в панели провайдера до того, как
+появятся пиры; для `--test` нужны 8443 и 8444.
+
+Дальше в руководстве тот же путь с объяснением каждого шага, а раздел 12 — нативный установщик.
 
 ## 1. Что получится и что нужно
 
