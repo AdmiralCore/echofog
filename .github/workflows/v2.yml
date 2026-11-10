@@ -24,7 +24,9 @@ jobs:
   test:
     name: Tests and boundaries
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # one package at a time (see the race run below), which is slower than the 15 minutes this
+    # job took while four packages shared the runner
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: echofog-core-oss
@@ -47,7 +49,7 @@ jobs:
           fi
 
       - name: Tests with the race detector
-        run: go test -race -count=1 ./internal/v2/...
+        run: go test -race -p 1 -count=1 ./internal/v2/...
 
       # The same check the race run already performs, repeated explicitly so a boundary failure
       # is named in the job log instead of hiding behind a package failure.
