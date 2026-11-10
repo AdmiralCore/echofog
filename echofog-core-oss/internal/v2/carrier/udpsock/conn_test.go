@@ -21,18 +21,23 @@ import (
 // task requires: 10 000 datagrams of different sizes, same result on both paths.
 const totalDatagrams = 10000
 
-// recvWindow is how many datagrams may be in flight in the loopback test: more than the kernel
-// receive buffer can drop, so a lost datagram is a failure and not a race with the sender.
-const recvWindow = 1024
-
 // testRecvBuffer is what the loopback pair asks of SO_RCVBUF. The kernel doubles the request and
 // caps it at net.core.rmem_max, which is 208 KiB on a stock Ubuntu runner: asking 104 KiB leaves
 // exactly the 208 KiB ceiling CI has, so a local run sees the runner's buffer instead of a 4 MiB
-// one. The old 1024-datagram window does not fit it: 208 KiB holds 92 datagrams of 1400 bytes.
+// one. One chunk at a time has to fit it: 208 KiB holds 92 datagrams of 1400 bytes.
 const testRecvBuffer = 104 << 10
 
 // maxWriteBatch is the longest train the test asks for; the kernel accepts 64 segments.
 const maxWriteBatch = 32
+
+// stallTimeout is how long a chunk may stay unaccounted for before the sender reports the loss.
+// Loopback delivers a chunk in microseconds, so only a lost datagram reaches it; it is a loss
+// detector, not the test's time budget.
+const stallTimeout = 10 * time.Second
+
+// readSlice is one read deadline of the receiver loop: short enough to notice the end of the
+// stream quickly, long enough to keep the syscall count low.
+const readSlice = 50 * time.Millisecond
 
 var payloadSizes = [...]int{8, 16, 48, 100, 256, 600, 1200, 1400}
 
@@ -306,6 +311,14 @@ func TestTransportConn(t *testing.T) {
 
 // runDatagrams sends the whole sequence through one socket pair and fails on the first datagram
 // that is lost, duplicated or altered. Both paths produce the same verified sequence.
+//
+// The sender keeps one chunk in flight and waits for the receiver to account for it. The kernel
+// queue holds 92 datagrams of 1400 bytes in the 208 KiB a runner gives — each queued datagram costs
+// its truesize, 1.65 payloads here — so a chunk of maxWriteBatch leaves two thirds of it empty. The
+// earlier version counted a 1024-datagram window with a semaphore: the overflow was dropped, the
+// tokens of the dropped datagrams were never returned and the sender blocked until the 20 s read
+// deadline fired (CI: "after 9671 datagrams: i/o timeout"). A datagram lost anyway is reported with
+// the chunk it belonged to, never skipped: the window has to make loss impossible, not unlikely.
 func runDatagrams(t *testing.T, opt Options, batched bool) {
 	t.Helper()
 	recv := listen(t, opt)
@@ -315,47 +328,71 @@ func runDatagrams(t *testing.T, opt Options, batched bool) {
 	}
 	dst := addrOf(t, recv)
 
-	sem := make(chan struct{}, recvWindow)
-	for i := 0; i < recvWindow; i++ {
-		sem <- struct{}{}
-	}
-	seen := make([]int, totalDatagrams)
-	errCh := make(chan error, 1)
+	seen := make([]int, totalDatagrams) // the receiver's: written and read in its goroutine
+	var got atomic.Int64                // how many datagrams the receiver accounts for
+	wake := make(chan struct{}, 1)      // the receiver nudges the sender after a drain
+	stop := make(chan struct{})         // closed when the receiver returns, for any reason
+	var recvErr error                   // written before stop is closed, read only after
+
 	go func() {
 		ms := messages(maxWriteBatch, 2048)
-		got := 0
-		for got < totalDatagrams {
-			if err := recv.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
-				errCh <- err
+		fail := func(err error) {
+			recvErr = err
+			close(stop)
+		}
+		for {
+			// A short deadline keeps the loop interruptible; a chunk arrives in microseconds.
+			if err := recv.SetReadDeadline(time.Now().Add(readSlice)); err != nil {
+				fail(err)
 				return
 			}
 			n, err := recv.ReadBatch(ms, 0)
 			if err != nil {
-				errCh <- fmt.Errorf("after %d datagrams: %w", got, err)
+				if errors.Is(err, os.ErrDeadlineExceeded) {
+					continue
+				}
+				fail(fmt.Errorf("after %d datagrams: %w", got.Load(), err))
 				return
 			}
 			for i := 0; i < n; i++ {
 				idx, ok := checkPayload(ms[i].Buffers[0][:ms[i].N])
 				if !ok {
-					errCh <- fmt.Errorf("datagram %d: payload of %d bytes is not one of ours", got, ms[i].N)
+					fail(fmt.Errorf("datagram %d: payload of %d bytes is not one of ours", got.Load(), ms[i].N))
 					return
 				}
 				seen[idx]++
-				got++
-				sem <- struct{}{}
+				got.Add(1)
+			}
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+			if int(got.Load()) >= totalDatagrams {
+				close(stop)
+				return
 			}
 		}
-		errCh <- nil
 	}()
 
-	acquire := func() {
-		select {
-		case <-sem:
-		case err := <-errCh:
-			if err == nil {
-				err = errors.New("receiver stopped early")
+	// awaitChunk waits until the receiver accounts for every datagram below end. A chunk is one
+	// write away and fits the receive buffer, so a datagram that does not arrive within
+	// stallTimeout was lost: the test names the chunk instead of waiting for a read deadline.
+	awaitChunk := func(from, end int) {
+		timer := time.NewTimer(stallTimeout)
+		defer timer.Stop()
+		for int(got.Load()) < end {
+			select {
+			case <-wake:
+			case <-stop:
+				if recvErr != nil {
+					t.Fatal(recvErr)
+				}
+				t.Fatalf("receiver stopped at %d of %d datagrams", got.Load(), totalDatagrams)
+			case <-timer.C:
+				t.Fatalf("chunk [%d,%d) is not delivered: the receiver holds %d of %d datagrams after %s;"+
+					" a chunk of at most %d datagrams fits the %d-byte receive buffer, so a datagram was lost, not delayed",
+					from, end, got.Load(), totalDatagrams, stallTimeout, maxWriteBatch, testRecvBuffer)
 			}
-			t.Fatalf("receive: %v", err)
 		}
 	}
 
@@ -365,26 +402,25 @@ func runDatagrams(t *testing.T, opt Options, batched bool) {
 			end++
 		}
 		chunk := allPayloads[i:end]
-		for range chunk {
-			acquire()
-		}
 		if batched {
 			n, err := send.WriteBatch(dst, chunk)
 			if err != nil || n != len(chunk) {
 				t.Fatalf("batch write [%d,%d): %d %v", i, end, n, err)
 			}
 		} else {
-			for _, p := range chunk {
+			for j, p := range chunk {
 				if _, err := send.WriteTo(p, dst); err != nil {
-					t.Fatalf("write %d: %v", i, err)
+					t.Fatalf("write %d: %v", i+j, err)
 				}
 			}
 		}
+		awaitChunk(i, end)
 		i = end
 	}
 
-	if err := <-errCh; err != nil {
-		t.Fatal(err)
+	<-stop
+	if recvErr != nil {
+		t.Fatal(recvErr)
 	}
 	for i, n := range seen {
 		if n != 1 {
