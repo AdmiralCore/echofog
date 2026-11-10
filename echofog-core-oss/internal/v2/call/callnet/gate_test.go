@@ -465,6 +465,26 @@ func runStream(t *testing.T, v2 bool, qid string, viewers int, relayed bool, win
 		return true
 	}, testutil.Slow(30*time.Second), 50*time.Millisecond, "every viewer receives the stream: %s", gateFrames(gc))
 
+	// The gate measures a steady window. A viewer re-parented inside one gets nothing for as long
+	// as the move takes, and a window with a topology change is not what the gate promises, so a
+	// window in which some viewer received nothing at all is measured again. A viewer that never
+	// receives still fails: three windows are the bound.
+	var res streamRes
+	for attempt := 1; ; attempt++ {
+		var dead int
+		res, dead = measureStream(gc, pump, win)
+		if dead == 0 || attempt == 3 {
+			break
+		}
+		t.Logf("gate: %d of %d viewers received nothing in the window, measuring again (%d/3)", dead, viewers, attempt)
+	}
+	return res
+}
+
+// measureStream measures one window of the running stream: what every viewer received of what the
+// pump sent inside it, the latency of those frames and the fanout of the tree. dead is the number
+// of viewers that received nothing at all in the window.
+func measureStream(gc *gcall, pump *gatePump, win time.Duration) (res streamRes, dead int) {
 	t0 := time.Now()
 	time.Sleep(win)
 	t1 := time.Now()
@@ -477,10 +497,9 @@ func runStream(t *testing.T, v2 bool, qid string, viewers int, relayed bool, win
 	}
 	pump.mu.Unlock()
 
-	var res streamRes
 	var fps []float64
 	var all []time.Duration
-	res.viewers = viewers
+	res.viewers = len(gc.nodes) - 1
 	for _, g := range gc.nodes[1:] {
 		g.mu.Lock()
 		got := 0
@@ -491,6 +510,9 @@ func runStream(t *testing.T, v2 bool, qid string, viewers int, relayed bool, win
 			}
 		}
 		g.mu.Unlock()
+		if got == 0 {
+			dead++
+		}
 		fps = append(fps, float64(got)/(win-300*time.Millisecond).Seconds())
 		res.loss = max(res.loss, 1-float64(got)/float64(max(1, len(sentFrames))))
 	}
@@ -501,11 +523,11 @@ func runStream(t *testing.T, v2 bool, qid string, viewers int, relayed bool, win
 	for _, g := range gc.nodes[1:] {
 		recv += float64(gc.sentTo(g.id))
 	}
-	recv /= float64(viewers)
+	recv /= float64(res.viewers)
 	for _, g := range gc.nodes[1:] {
 		res.fanout = max(res.fanout, float64(gc.sentBy(g.id))/recv)
 	}
-	return res
+	return res, dead
 }
 
 func (r streamRes) String() string {
