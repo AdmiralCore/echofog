@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -411,6 +412,19 @@ func pct(d []time.Duration, p float64) time.Duration {
 	return s[min(len(s)-1, int(float64(len(s))*p))]
 }
 
+// gateFrames reports what every viewer has received, so a failure of the stream gate names the
+// viewer that fell behind instead of only the deadline.
+func gateFrames(gc *gcall) string {
+	var b strings.Builder
+	for i, g := range gc.nodes[1:] {
+		g.mu.Lock()
+		n := len(g.frameAt)
+		g.mu.Unlock()
+		fmt.Fprintf(&b, "viewer %d: %d frames; ", i+1, n)
+	}
+	return b.String()
+}
+
 // runStream: node 0 broadcasts a screen stream at the preset to the viewers, 1..viewers.
 func runStream(t *testing.T, v2 bool, qid string, viewers int, relayed bool, win time.Duration) streamRes {
 	t.Helper()
@@ -449,7 +463,7 @@ func runStream(t *testing.T, v2 bool, qid string, viewers int, relayed bool, win
 			}
 		}
 		return true
-	}, testutil.Slow(30*time.Second), 50*time.Millisecond, "every viewer receives the stream")
+	}, testutil.Slow(30*time.Second), 50*time.Millisecond, "every viewer receives the stream: %s", gateFrames(gc))
 
 	t0 := time.Now()
 	time.Sleep(win)
