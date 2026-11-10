@@ -24,9 +24,7 @@ jobs:
   test:
     name: Tests and boundaries
     runs-on: ubuntu-latest
-    # one package at a time (see the race run below), which is slower than the 15 minutes this
-    # job took while four packages shared the runner
-    timeout-minutes: 40
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: echofog-core-oss
@@ -47,9 +45,6 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-
-      - name: Tests with the race detector
-        run: go test -race -p 1 -count=1 ./internal/v2/...
 
       # The same check the race run already performs, repeated explicitly so a boundary failure
       # is named in the job log instead of hiding behind a package failure.
@@ -73,6 +68,34 @@ jobs:
           git diff --exit-code -- docs/protocol/v2/vectors ':!docs/protocol/v2/vectors/link.json'
           # The diff above cannot see a newly written file; catch that separately.
           test -z "$(git ls-files --others --exclude-standard -- docs/protocol/v2/vectors)"
+
+  # The v2 tree is full of goroutines (QUIC streams, call trees, relay loops), so every push runs
+  # it under the race detector. Split into parts that run side by side, one test binary at a time:
+  # the packages start real nodes on loopback, and several meshes at once on a 4-vCPU runner starve
+  # each other into timeouts that look like failures.
+  race:
+    name: Race detector (${{ matrix.part }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2]
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: echofog-core-oss
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Tests with the race detector
+        run: |
+          set -euo pipefail
+          go list ./internal/v2/... | awk -v p=${{ matrix.part }} 'NR % 3 == p' > part.txt
+          echo "$(wc -l < part.txt) packages in this part"
+          test -s part.txt
+          xargs go test -race -p 1 -count=1 -timeout 20m < part.txt
 
   build:
     name: Cross build

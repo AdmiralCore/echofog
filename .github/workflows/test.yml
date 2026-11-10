@@ -10,9 +10,18 @@ permissions:
   contents: read
 
 jobs:
+  # The core suite is split into parts that run side by side, and every part runs one test binary
+  # at a time (-p 1): many packages start real QUIC nodes on loopback with time limits, and two of
+  # them beside each other on a 4-vCPU runner starve the meshes into timeouts that look like
+  # failures (a different test each run, all green on their own). Round-robin over the package
+  # list keeps the parts balanced and still covers the list whole.
   go:
-    name: Go tests
+    name: Go tests (${{ matrix.part }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -24,14 +33,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
       - name: Vet
+        if: matrix.part == 0
         run: go vet ./echofog-core-oss/...
-      # one test binary at a time: many packages start real QUIC nodes on loopback with time
-      # limits, and two of them beside each other on a 4-vCPU runner starve the meshes into
-      # timeouts that look like failures (a different test each run, all green on their own)
       - name: Test core
-        run: go test -p 1 ./echofog-core-oss/... -count=1
-      # main.go embeds frontend/dist, which is not in git (the frontend job builds the real one);
-      # the Go tests only need the folder to exist so the package compiles
+        run: |
+          set -euo pipefail
+          go list ./echofog-core-oss/... | awk -v p=${{ matrix.part }} 'NR % 4 == p' > part.txt
+          echo "$(wc -l < part.txt) packages in this part"
+          test -s part.txt
+          xargs go test -p 1 -count=1 < part.txt
+
+  # main.go embeds frontend/dist, which is not in git (the frontend job builds the real one);
+  # the Go tests only need the folder to exist so the package compiles
+  desktop:
+    name: Desktop tests (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: WebKit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
       - name: Placeholder frontend build
         run: |
           mkdir -p echofog-desktop-oss/frontend/dist
@@ -41,17 +66,27 @@ jobs:
 
   # The core is full of goroutines (QUIC streams, call trees, payments); a data race there shows
   # up as a rare crash on someone's machine, so every push runs the core under the race detector.
-  # Its own job: it is several times slower and runs beside the plain tests.
+  # Its own job, split into parts like the plain tests: it is several times slower.
   race:
-    name: Go race detector
+    name: Go race detector (${{ matrix.part }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.3'
       - name: Test core with -race
-        run: go test -race -p 1 $(go list ./echofog-core-oss/... | grep -v -e /internal/simulation -e /testbed) -count=1 -timeout 25m
+        run: |
+          set -euo pipefail
+          go list ./echofog-core-oss/... | grep -v -e /internal/simulation -e /testbed \
+            | awk -v p=${{ matrix.part }} 'NR % 4 == p' > part.txt
+          echo "$(wc -l < part.txt) packages in this part"
+          test -s part.txt
+          xargs go test -race -p 1 -count=1 -timeout 25m < part.txt
 
   frontend:
     name: Frontend build
