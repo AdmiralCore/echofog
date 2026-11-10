@@ -114,7 +114,7 @@ jobs:
   fuzz:
     name: Fuzz smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: echofog-core-oss
@@ -124,8 +124,9 @@ jobs:
         with:
           go-version: '1.27.3'
 
-      # Ten seconds per target: long enough to catch a crash in the parsers, short enough for
-      # the whole tree (about thirty targets) to stay well inside the job timeout.
+      # Ten seconds per target: long enough to catch a crash in the parsers. The tree now has more
+      # than thirty targets and the list keeps growing with every new decoder, so the job timeout
+      # is set generously instead of tracking the count. The loop stops at the first failure.
       - name: Every fuzz target for 10 seconds
         run: |
           set -euo pipefail

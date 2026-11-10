@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -76,6 +77,13 @@ func TestReality2DialWithoutGODEBUG(t *testing.T) {
 	if strings.Contains(os.Getenv("GODEBUG"), "cryptocustomrand") {
 		t.Skip("GODEBUG=cryptocustomrand is set; the canary must run without it")
 	}
+	// The GeoIP database reaches the binding with T12.1; until then countryOf reports no country and
+	// the policy allows TLS-shaped carriers over TCP only (T6.4c), so a reality2-quic dial is
+	// refused before it starts. Pin the lookup to a same-country ("lab") answer for the canary, as
+	// mem_canary_test.go does, and restore it after (no t.Parallel here: countryOf is global).
+	prevCountryOf := countryOf
+	countryOf = func(netip.Addr) (string, bool) { return "lab", true }
+	t.Cleanup(func() { countryOf = prevCountryOf })
 	cover := newCover(t)
 	cert := testCert(t)
 	var hostCard string
