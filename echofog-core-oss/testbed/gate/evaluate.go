@@ -399,7 +399,7 @@ func productRows(b *behaviour.Report) []Row {
 		pmtu.Status, pmtu.Value = Green, "connects"
 		if len(bad) > 0 {
 			pmtu.Status, pmtu.Value = Red, strings.Join(bad, ", ")+": no connection"
-			pmtu.Note = waits + ": the first flight is 1271 bytes"
+			pmtu.Note = waits + ": a datagram of the first flight did not fit the path (N3-FIX)"
 		}
 	}
 	return []Row{freeze, pmtu}

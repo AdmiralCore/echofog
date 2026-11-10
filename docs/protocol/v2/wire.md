@@ -212,6 +212,11 @@ that the path cannot carry its Inits (an ICMP Packet Too Big message, a known pa
 drew, or no answer to an Init after its retries), it marks noise3 unusable on that path and **falls back to
 the TCP carriers** (`reality2-tcp` or `ws2`, §1) without waiting for a full handshake timeout.
 
+The default datagram ceiling is **1172 bytes** (the UDP payload of an IPv4 path of MTU 1200), so a noise3
+flow needs no path MTU discovery and fits the narrowest paths the carriers target; the inner QUIC stack
+advertises `max_udp_payload_size` of the ceiling minus 22 and the largest padding, and never sends more. A
+platform that knows a wider path MAY raise the ceiling up to 1452.
+
 **Anti-amplification.** Until the inner QUIC handshake is confirmed and an authenticated packet has arrived
 from the current reply address, a responder flow sends at most **3 times the bytes it has received** on the
 flow (outer datagram bytes, counted over all Inits and data packets of the flow). The inner QUIC stack applies

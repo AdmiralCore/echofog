@@ -35,8 +35,8 @@ var (
 
 // Limits from wire.md §9, §10 and the datagram layout of §2.4 (see doc.go).
 const (
-	minInitLen = 1271
-	maxInitLen = 1452
+	minInitLen = 900
+	maxInitLen = 1200
 
 	maxPad     = 16384
 	maxBuckets = 32
@@ -95,7 +95,7 @@ var (
 	}
 	defaultUDPProfile = Profile{
 		ID:        IDDefaultUDP,
-		InitLen:   &Range{1280, 1420},
+		InitLen:   &Range{900, 1200},
 		Pad:       &Range{0, 48},
 		Junk:      &Junk{Count: Range{0, 2}, Len: Range{32, 256}, Gap: Range{5, 30}},
 		Keepalive: Range{defaultKeepaliveMin, defaultKeepaliveMax},

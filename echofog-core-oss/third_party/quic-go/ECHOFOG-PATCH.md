@@ -153,6 +153,26 @@ client's Initial packets) and a completed handshake. It runs without any GODEBUG
 `Config.InitialPacketSize` is now kept (never a larger one). The REALITY v2 client asks for 1232
 towards an IPv6 address, so the Initial datagram (1232 + 48) fits a path of PMTU 1280.
 
+## 4b. Small Initial datagrams for noise3 (N3-FIX)
+
+`interface.go`, `config.go`, `connection.go`, `packet_packer.go`, `server.go`,
+`internal/wire/transport_parameters.go`
+
+noise3 must keep every datagram before the first answer at 1200 bytes or less, and the Init adds 71
+bytes, so the inner Initial cannot be padded to RFC 9000's 1200. Two `quic.Config` fields:
+
+- `AllowSmallInitial`: a server accepts Initial datagrams below 1200 bytes (`server.go`) and does not
+  pad its own Initial packets (`packet_packer.go`); the anti-amplification limit still counts the bytes
+  it received. The floors of `InitialPacketSize` and `MaxUDPPayloadSize` drop from 1200 to 800
+  (`config.go`), and a peer's `max_udp_payload_size` parameter is accepted from 800
+  (`transport_parameters.go`).
+- `InitialFlightSize`: a client sends every datagram at this size until its handshake completes
+  (`connection.go` `maxPacketSize`; the packer already pads client Initial datagrams to that size), then
+  `InitialPacketSize` again. Valid from 200, only with `AllowSmallInitial`.
+
+Both are off by default, so no other user of the fork changes behaviour. Both ends of a noise3 flow are
+EchoFog, which is why the RFC 9000 §14.1 minimum can be waived there (wire.md §2.4).
+
 ## 5. Earlier local changes (present before patches 1-4)
 
 These two changes were already in EchoFog's copy when the numbered patches were

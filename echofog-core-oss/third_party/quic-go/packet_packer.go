@@ -142,6 +142,10 @@ type packetPacker struct {
 	// chaosProtection applies Chrome's chaos protection to Initial packets.
 	// See appendChaosProtectedPayload.
 	chaosProtection bool
+
+	// skipServerInitialPadding stops a server padding its ack-eliciting Initial packets to the
+	// datagram size (Config.AllowSmallInitial, EchoFog noise3 only).
+	skipServerInitialPadding bool
 }
 
 const DatagramFrameMaxPeekTimes = 10
@@ -346,7 +350,7 @@ func (p *packetPacker) shortHeaderPacketLength(connID protocol.ConnectionID, pnL
 // size is the expected size of the packet, if no padding was applied.
 func (p *packetPacker) initialPaddingLen(frames []ackhandler.Frame, currentSize, maxPacketSize protocol.ByteCount) protocol.ByteCount {
 	// For the server, only ack-eliciting Initial packets need to be padded.
-	if p.perspective == protocol.PerspectiveServer && !ackhandler.HasAckElicitingFrames(frames) {
+	if p.perspective == protocol.PerspectiveServer && (p.skipServerInitialPadding || !ackhandler.HasAckElicitingFrames(frames)) {
 		return 0
 	}
 	if currentSize >= maxPacketSize {

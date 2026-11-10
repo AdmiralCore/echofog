@@ -245,3 +245,19 @@ func TestDefaultProfileInitLenWithin1200(t *testing.T) {
 		t.Fatal("a profile with init_len above 1200 was accepted")
 	}
 }
+
+// PMTU 1200 over IPv4 (UDP payload 1172): the default ceiling fits it, in both directions.
+func TestPath1172Passes(t *testing.T) {
+	ev, err := dialThroughTap(t, 0, 1172)
+	if err != nil {
+		t.Fatalf("Dial on a 1172-byte path: %v", err)
+	}
+	for _, e := range ev {
+		if e.toServer && e.size < 0 {
+			t.Fatalf("the path dropped a %d-byte datagram", -e.size)
+		}
+		if !e.toServer && e.size > 1172 {
+			t.Fatalf("the responder sent %d bytes, over the 1172-byte path", e.size)
+		}
+	}
+}

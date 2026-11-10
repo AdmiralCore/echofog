@@ -20,11 +20,19 @@ const (
 	InitOverhead = 71
 	// DataOverhead is the masked packet number(4) + AEAD tag(16).
 	DataOverhead = 22
-	// MinInner is the size of an inner QUIC Initial (wire.md §2.4).
-	MinInner = 1200
-	// MinInitLen is the smallest datagram that can carry an inner QUIC Initial.
+	// MinInner is the smallest inner datagram a responder accepts in an Init (wire.md §2.4).
+	MinInner = 200
+	// MinInitLen is the smallest Init datagram a responder processes (wire.md §2.5 step 1).
 	MinInitLen = InitOverhead + MinInner
-	// MaxDatagramLen is the noise3 payload ceiling of an IPv4 1500-byte path (wire.md §2.4).
+	// MaxFirstLen is the longest datagram of a flow before the first authenticated responder packet
+	// (wire.md §2.4).
+	MaxFirstLen = 1200
+	// MinCeiling is the smallest datagram ceiling noise3 works with: the lower bound of init_len.
+	MinCeiling = 900
+	// DefaultDatagramLen is the default outer datagram ceiling: the UDP payload of an IPv4 path of
+	// MTU 1200, so no path MTU discovery is needed (wire.md §2.4).
+	DefaultDatagramLen = 1172
+	// MaxDatagramLen is the hard noise3 payload ceiling of an IPv4 1500-byte path.
 	MaxDatagramLen = 1452
 	// MaxPacketNumber is the largest packet number a sender may use (wire.md §2.6).
 	MaxPacketNumber = 1<<62 - 1

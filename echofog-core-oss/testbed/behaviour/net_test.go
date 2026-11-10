@@ -156,17 +156,17 @@ func TestNoise3RecoversAfterACut(t *testing.T) {
 	assert.GreaterOrEqual(t, r.MaxGap, 2*time.Second, "the cut was felt")
 }
 
-// PMTU 1280 and 1200: noise3 needs an outer datagram of 1271 bytes for the first flight (71 bytes
-// of Init overhead and the 1200-byte inner Initial), which does not fit a 1280-byte path once the
-// IP and UDP headers are counted. internal/v2/carrier/noise3/doc.go says so; this measures it.
+// PMTU 1280 and 1200: no datagram of a noise3 flow before the first answer is longer than 1200
+// bytes, and the default ceiling (1172) fits a path of MTU 1200 in both directions (wire.md §2.4,
+// N3-FIX), so the flow connects on both.
 func TestNoise3AndThePathMTU(t *testing.T) {
 	ok, _ := transfer(t, NetemConfig{Seed: 6, MTU: 1500}, 32<<10, nil)
 	assert.True(t, ok.Connected, ok.Err)
 
 	for _, mtu := range []int{1280, 1200} {
 		r, nm := transfer(t, NetemConfig{Seed: 6, MTU: mtu - 28}, 32<<10, nil) // the netem counts the payload
-		assert.False(t, r.Connected, "MTU %d: the first flight does not fit", mtu)
-		assert.Greater(t, nm.Stats().Oversize, int64(0), "MTU %d: it was the size that killed it", mtu)
+		assert.True(t, r.Connected, "MTU %d: %s", mtu, r.Err)
+		assert.Zero(t, nm.Stats().Oversize, "MTU %d: nothing was lost to the size", mtu)
 	}
 }
 

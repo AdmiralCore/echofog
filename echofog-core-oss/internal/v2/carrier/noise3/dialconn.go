@@ -228,6 +228,9 @@ func (c *dialConn) sendInit(inner []byte, now time.Time) (int, error) {
 		if total > c.maxDatagram {
 			total = c.maxDatagram
 		}
+		if total > packet.MaxFirstLen && need <= packet.MaxFirstLen {
+			total = packet.MaxFirstLen // no datagram before the first answer is longer (wire.md §2.4)
+		}
 		dg, err := packet.SealInit(keys, repr, uint32(now.Unix()), inner, total)
 		if err != nil {
 			return 0, err

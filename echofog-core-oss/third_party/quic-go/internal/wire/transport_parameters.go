@@ -325,8 +325,9 @@ func (p *TransportParameters) readNumericTransportParameter(b []byte, paramID tr
 	case maxIdleTimeoutParameterID:
 		p.MaxIdleTimeout = max(protocol.MinRemoteIdleTimeout, time.Duration(val)*time.Millisecond)
 	case maxUDPPayloadSizeParameterID:
-		if val < 1200 {
-			return fmt.Errorf("invalid value for max_udp_payload_size: %d (minimum 1200)", val)
+		// EchoFog patch 4b: noise3 peers (Config.AllowSmallInitial) advertise less than 1200.
+		if val < 800 {
+			return fmt.Errorf("invalid value for max_udp_payload_size: %d (minimum 800)", val)
 		}
 		p.MaxUDPPayloadSize = protocol.ByteCount(val)
 	case ackDelayExponentParameterID:

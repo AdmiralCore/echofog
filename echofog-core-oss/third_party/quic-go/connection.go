@@ -376,6 +376,7 @@ var newConnection = func(
 	)
 	s.cryptoStreamHandler = cs
 	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective, false)
+	s.packer.(*packetPacker).skipServerInitialPadding = s.config.AllowSmallInitial
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, s.oneRTTStream)
 	return &wrappedConn{Conn: s}
@@ -2930,6 +2931,9 @@ func (c *Conn) maxPacketSize() protocol.ByteCount {
 		// If the server sends a max_udp_payload_size that's smaller than this size, we can ignore this:
 		// Apparently the server still processed the (fully padded) Initial packet anyway.
 		if c.perspective == protocol.PerspectiveClient {
+			if c.config.InitialFlightSize != 0 && !c.handshakeComplete {
+				return protocol.ByteCount(c.config.InitialFlightSize)
+			}
 			return protocol.ByteCount(c.config.InitialPacketSize)
 		}
 		// On the server side, there's no downside to using 1200 bytes until we received the client's transport

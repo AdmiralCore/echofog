@@ -48,14 +48,23 @@ func validateConfig(config *Config) error {
 	if config.MaxConnectionReceiveWindow > quicvarint.Max {
 		config.MaxConnectionReceiveWindow = quicvarint.Max
 	}
-	if config.InitialPacketSize > 0 && config.InitialPacketSize < protocol.MinInitialPacketSize {
-		config.InitialPacketSize = protocol.MinInitialPacketSize
+	// AllowSmallInitial (EchoFog noise3) lowers the floors: the outer path of a noise3 flow may
+	// carry less than 1200 bytes of inner datagram.
+	minPacket := uint16(protocol.MinInitialPacketSize)
+	if config.AllowSmallInitial {
+		minPacket = 800
+	}
+	if config.InitialPacketSize > 0 && config.InitialPacketSize < minPacket {
+		config.InitialPacketSize = minPacket
 	}
 	if config.InitialPacketSize > protocol.MaxPacketBufferSize {
 		config.InitialPacketSize = protocol.MaxPacketBufferSize
 	}
-	if config.MaxUDPPayloadSize != 0 && config.MaxUDPPayloadSize < protocol.MinInitialPacketSize {
-		return fmt.Errorf("invalid max_udp_payload_size: %d (minimum %d)", config.MaxUDPPayloadSize, protocol.MinInitialPacketSize)
+	if config.InitialFlightSize != 0 && (config.InitialFlightSize < 200 || !config.AllowSmallInitial) {
+		return fmt.Errorf("invalid initial flight size: %d (minimum 200, needs AllowSmallInitial)", config.InitialFlightSize)
+	}
+	if config.MaxUDPPayloadSize != 0 && config.MaxUDPPayloadSize < minPacket {
+		return fmt.Errorf("invalid max_udp_payload_size: %d (minimum %d)", config.MaxUDPPayloadSize, minPacket)
 	}
 	// check that all QUIC versions are actually supported
 	for _, v := range config.Versions {
@@ -161,6 +170,8 @@ func populateConfig(config *Config) *Config {
 		OmitMaxDatagramFrameSize:         omitMaxDatagramFrameSize,
 		AssumePeerMaxDatagramFrameSize:   config.AssumePeerMaxDatagramFrameSize,
 		InitialPacketSize:                initialPacketSize,
+		AllowSmallInitial:                config.AllowSmallInitial,
+		InitialFlightSize:                config.InitialFlightSize,
 		MaxUDPPayloadSize:                config.MaxUDPPayloadSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
