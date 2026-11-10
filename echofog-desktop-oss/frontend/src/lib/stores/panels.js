@@ -34,20 +34,24 @@ export function togglePanel(kind) {
 export const isPanelHidden = (kind) => get(panelHidden[kind]);
 
 /**
- * The "you" card stands at the foot of the personal list and the rail holds one too: two avatars with
- * the same name would say it twice. The list reports its own card here, and the rail keeps its card
- * only while that report is false.
+ * The "you" card stands at the foot of a side column (the personal list, or a space's channels) and
+ * the rail holds one too: two avatars with the same name would say it twice. Each column reports its
+ * own card here, and the rail keeps its card only while none of them reports one.
  */
-export const selfCardShown = writable(false);
-
-/** Whether a column on screen carries the "you" card: only the personal list does. */
-export const selfCardOnScreen = (view, showAside, hidden) => view === 'chats' && showAside && !hidden;
-
 export const selfCards = writable({ personal: false, space: false });
 
-// TODO: the rules, not their placeholders
-export const personalCardOnScreen = () => false;
-export const spaceCardOnScreen = () => false;
-export const railCardShown = () => false;
-export function setSelfCard() {}
+/** Whether the personal list on screen carries the "you" card. */
+export const personalCardOnScreen = (view, showAside, hidden) => view === 'chats' && showAside && !hidden;
+
+/** Whether a space's column of channels on screen carries one. */
+export const spaceCardOnScreen = (view, kind, columnShown) => view === 'chats' && kind === 'group' && columnShown;
+
+/** Whether the rail shows its own card: only while no column reports one. */
+export const railCardShown = (cards) => !cards.personal && !cards.space;
+
+/** A column's report; the same value again keeps the state, so the rail is not woken in vain. */
+export function setSelfCard(kind, onScreen) {
+  const on = !!onScreen;
+  selfCards.update((cards) => (cards[kind] === on ? cards : { ...cards, [kind]: on }));
+}
 

@@ -11,7 +11,7 @@
   import { isCallActive, initCallEvents } from '../stores/call.store.js';
   import { loadPeerDirectory } from '../stores/peers.store.js';
   import { view, focus } from '../stores/nav.js';
-  import { selfCardShown } from '../stores/panels.js';
+  import { selfCards, railCardShown } from '../stores/panels.js';
   import { anon, refreshAnon } from '../stores/anon.js';
   import { slide } from 'svelte/transition';
   import { netStatus } from '../stores/net.js';
@@ -121,6 +121,9 @@
   $: myName = ($displayName || '').trim() || $profile || $t('shell.me');
   $: unread = $chats.reduce((n, c) => n + (c.unread || 0), 0);
   $: online = net.status === 'ONLINE' && net.peerCount > 0;
+  // a column on screen carries its own "you" card (the personal list, a space's channels), so the rail
+  // does not repeat it
+  $: railCard = railCardShown($selfCards);
 
   // offline for a while after start (the built-in nodes may be blocked): offer to add a node by hand
   let offlineSince = Date.now();
@@ -247,8 +250,8 @@
             <span class="label">{$resolvedTheme === 'dark' ? $t('shell.darkTheme') : $t('shell.lightTheme')}</span>
           </button>
         </Tooltip>
-        <!-- the "you" card of the chat list stands on screen, so the rail does not repeat it -->
-        {#if !$selfCardShown}
+        <!-- a column on screen carries the "you" card, so the rail does not repeat it -->
+        {#if railCard}
           <Menu items={avatarMenu} width={236} label={myName} on:select={menuPick}>
             <button slot="trigger" let:toggle let:open class="me" class:active={$view === 'settings'} aria-haspopup="menu" aria-expanded={open}
               title={`${myName} · ${statusText}${$anon && $anon.running && !$anon.broken ? ' · ' + $t('anon.badge.' + $anon.seenBy) : ''}`} on:click={toggle}>

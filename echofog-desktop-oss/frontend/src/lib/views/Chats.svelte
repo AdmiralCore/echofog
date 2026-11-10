@@ -22,7 +22,7 @@
   import Skeleton from '../components/ui/Skeleton.svelte';
   import SelfCard from '../features/chat/SelfCard.svelte';
   import { chatsAction, view } from '../stores/nav.js';
-  import { panelHidden, togglePanel, selfCardShown, selfCardOnScreen } from '../stores/panels.js';
+  import { panelHidden, togglePanel, setSelfCard, personalCardOnScreen } from '../stores/panels.js';
   import PanelHost from '../features/chat/PanelHost.svelte';
   import IconButton from '../components/ui/IconButton.svelte';
 
@@ -108,7 +108,7 @@
   $: showAside = narrow ? !opened : !isSpace;
   // this column carries the "you" card at its foot, so the rail leaves its own card away while it is
   // on screen (folded to a strip, it is not)
-  $: selfCardShown.set(selfCardOnScreen($view, showAside, $listHidden));
+  $: setSelfCard('personal', personalCardOnScreen($view, showAside, $listHidden));
 
   // the chat beside a call opens and closes; the choice is remembered, and without one the chat is open
   // only when the window is wide enough to leave the picture its width
