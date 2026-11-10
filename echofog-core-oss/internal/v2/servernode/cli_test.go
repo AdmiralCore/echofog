@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -96,6 +97,31 @@ func TestCLIOperatorCommands(t *testing.T) {
 		if regexp.MustCompile(`[0-9a-f]{64}`).MatchString(o) {
 			t.Errorf("a 64-hex secret in the output: %q", o)
 		}
+	}
+	// --out writes the same link and nothing else: no id, no term.
+	linkFile := filepath.Join(t.TempDir(), "invite.txt")
+	code, out, errs = runCLI(nil, "invite", "create", "--data", dir, "--access", "30d", "--out", linkFile)
+	if code != 0 {
+		t.Fatalf("invite create --out: %d %q %q", code, out, errs)
+	}
+	link := regexp.MustCompile(`echofog://\S+`).FindString(out)
+	if link == "" {
+		t.Fatalf("no link in the output: %q", out)
+	}
+	raw, err := os.ReadFile(linkFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != link {
+		t.Fatalf("file holds %q, want the link only %q", raw, link)
+	}
+	if fi, err := os.Stat(linkFile); err != nil {
+		t.Fatal(err)
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("link file mode %o, want 600", fi.Mode().Perm())
+	}
+	if code, _, errs := runCLI(nil, "invite", "create", "--data", dir, "--out", filepath.Join(t.TempDir(), "missing", "invite.txt")); code != 1 || !strings.Contains(errs, "missing") {
+		t.Fatalf("unwritable --out: %d %q", code, errs)
 	}
 	// Bad terms are refused before any request.
 	if code, _, _ := runCLI(nil, "invite", "create", "--data", dir, "--access", "soon"); code != 2 {
