@@ -107,8 +107,8 @@
   $: isSpace = !!active && active.kind === 'group';
   $: showAside = narrow ? !opened : !isSpace;
   // this column carries the "you" card at its foot, so the rail leaves its own card away while it is
-  // on screen (folded to a strip, it is not)
-  $: setSelfCard('personal', personalCardOnScreen($view, showAside, $listHidden));
+  // on screen (folded to a strip, it is not; a narrow window forces it in place)
+  $: setSelfCard('personal', personalCardOnScreen($view, showAside, $listHidden, narrow));
 
   // the chat beside a call opens and closes; the choice is remembered, and without one the chat is open
   // only when the window is wide enough to leave the picture its width

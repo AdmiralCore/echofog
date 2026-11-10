@@ -40,8 +40,9 @@ export const isPanelHidden = (kind) => get(panelHidden[kind]);
  */
 export const selfCards = writable({ personal: false, space: false });
 
-/** Whether the personal list on screen carries the "you" card. */
-export const personalCardOnScreen = (view, showAside, hidden) => view === 'chats' && showAside && !hidden;
+/** Whether the personal list on screen carries the "you" card. `off` is a window with no room for a
+ *  strip: the column is forced in place there, whatever the remembered fold says. */
+export const personalCardOnScreen = (view, showAside, hidden, off) => view === 'chats' && showAside && (off || !hidden);
 
 /** Whether a space's column of channels on screen carries one. */
 export const spaceCardOnScreen = (view, kind, columnShown) => view === 'chats' && kind === 'group' && columnShown;
@@ -54,4 +55,3 @@ export function setSelfCard(kind, onScreen) {
   const on = !!onScreen;
   selfCards.update((cards) => (cards[kind] === on ? cards : { ...cards, [kind]: on }));
 }
-
