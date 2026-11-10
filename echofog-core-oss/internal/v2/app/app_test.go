@@ -395,6 +395,27 @@ func TestPreviewReadsALinkInsidePastedText(t *testing.T) {
 	}
 }
 
+func TestPreviewAndAddByLinkJoinAWrappedLink(t *testing.T) {
+	r := newRig(t, app.ModePublic)
+	// the link service is the place that joins the line breaks a terminal put inside the link
+	wrapped := "echofog://join?v=2&card=" + strings.Repeat("A", 30) + "\n" + strings.Repeat("B", 30)
+	r.ln.preview[wrapped] = &links.Preview{Kind: links.KindContact, Node: nid(7), Device: nid(8), NotAfter: testNow.Add(time.Hour)}
+
+	info, err := r.a.Preview(wrapped)
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	if info.Kind != "contact" || info.Node != hx(nid(7)) {
+		t.Fatalf("info %+v", info)
+	}
+	if _, err := r.a.AddByLink(context.Background(), wrapped); err != nil {
+		t.Fatalf("AddByLink: %v", err)
+	}
+	if len(r.ln.redeemed) != 1 || r.ln.redeemed[0] != wrapped {
+		t.Fatalf("redeemed %q, want the whole pasted text", r.ln.redeemed)
+	}
+}
+
 func TestAddByLinkSavesTheContact(t *testing.T) {
 	r := newRig(t, app.ModePublic)
 	c, err := r.a.AddByLink(context.Background(), "вот: "+contactURL)

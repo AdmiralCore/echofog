@@ -8,6 +8,7 @@ import (
 
 	"github.com/echofog/echofog-core/internal/config"
 	"github.com/echofog/echofog-core/internal/v2/app"
+	"github.com/echofog/echofog-core/internal/v2/links"
 	"github.com/echofog/echofog-core/pkg/dto"
 	"github.com/stretchr/testify/require"
 )
@@ -15,11 +16,12 @@ import (
 // stubV2App implements the methods the tests use; the embedded interface satisfies the rest.
 type stubV2App struct {
 	v2App
-	mode     app.Mode
-	joinErr  error
-	contacts []app.Contact
-	invited  app.InviteRequest
-	revoked  []string
+	mode       app.Mode
+	joinErr    error
+	previewErr error
+	contacts   []app.Contact
+	invited    app.InviteRequest
+	revoked    []string
 }
 
 func (s *stubV2App) SetMode(m app.Mode) error { s.mode = m; return nil }
@@ -28,6 +30,9 @@ func (s *stubV2App) AccessStatus(context.Context) (app.AccessStatus, error) {
 		Joined: []app.Joined{{Pass: "aabb", JoinedAt: time.Unix(5, 0), Connected: true}}}, nil
 }
 func (s *stubV2App) Preview(string) (app.LinkInfo, error) {
+	if s.previewErr != nil {
+		return app.LinkInfo{}, s.previewErr
+	}
 	return app.LinkInfo{Kind: "invitation", Node: "n1"}, nil
 }
 func (s *stubV2App) AddByLink(context.Context, string) (app.Contact, error) {
@@ -106,6 +111,32 @@ func TestV2ErrorsReachTheUIAsRussianTextWithoutInternals(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "203.0.113")
 	require.Regexp(t, `[а-я]`, err.Error())
+}
+
+func TestV2LinkErrorsAreToldApart(t *testing.T) {
+	// An expired link, one of another version, a damaged one, a revoked one and text that is no
+	// link at all must read as five different things, never as one "not a link" refusal.
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"expired", links.ErrExpired, "срок"},
+		{"other version", links.ErrOtherVersion, "версией"},
+		{"damaged", links.ErrMismatch, "повреждена"},
+		{"revoked", links.ErrRevoked, "отозвана"},
+		{"not a link", links.ErrNotLink, "не ссылка EchoFog"},
+	}
+	seen := map[string]string{}
+	for _, tc := range cases {
+		api := newFacadeNode(t, config.ProtocolV2)
+		api.AttachV2(&stubV2App{previewErr: tc.err, joinErr: tc.err})
+		_, err := api.ParseInvite("x")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), tc.want, tc.name)
+		seen[err.Error()] = tc.name
+	}
+	require.Len(t, seen, len(cases), "the refusals must not read the same: %v", seen)
 }
 
 func TestV2PassesShowTheLinkOnlyAtCreation(t *testing.T) {

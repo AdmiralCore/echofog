@@ -38,6 +38,22 @@ test('a link inside words and with trailing punctuation', () => {
   assert.ok(looksLikeLink(`see ${V2}`));
 });
 
+test('a link copied from a terminal with line breaks is the same link', () => {
+  // a terminal wraps a long line: every 60 characters a break lands inside the link
+  const brk = (s, n) => s.replace(new RegExp(`(.{${n}})`, 'g'), '$1\n');
+  assert.equal(classifyLink(brk(V2_INVITE, 60))?.text, V2_INVITE);
+  assert.deepEqual(joinInfo(brk(V2_INVITE, 60)), { version: 2, hasSecret: true });
+  // a terminal may wrap with a space instead of a break
+  assert.equal(classifyLink(brk(V2_INVITE, 60).replace(/\n/g, ' '))?.text, V2_INVITE);
+  // the https form keeps its shape after the breaks are taken out
+  const web = `https://join.example.org/join/#join?v=2&card=${CARD}&s=XYZ`;
+  const c = classifyLink(brk(web, 70));
+  assert.equal(c?.kind, 'join');
+  assert.equal(c.text, `echofog://join?v=2&card=${CARD}&s=XYZ`);
+  // other text is left as it is
+  assert.equal(fromWebLink('hello world'), 'hello world');
+});
+
 test('a v1 join link is version 1', () => {
   assert.deepEqual(joinInfo('echofog://join?id=' + 'a'.repeat(64) + '&addr=1.2.3.4:5'), { version: 1, hasSecret: false });
   assert.deepEqual(joinInfo('echofog://join?id=' + 'a'.repeat(64) + '&token=abc'), { version: 1, hasSecret: true });

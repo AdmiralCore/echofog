@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -333,6 +334,105 @@ func TestSlashForm(t *testing.T) {
 	}
 }
 
+// wrapEvery puts the line breaks a terminal puts into a long line: after every n bytes.
+func wrapEvery(s string, n int) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i += n {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		end := i + n
+		if end > len(s) {
+			end = len(s)
+		}
+		b.WriteString(s[i:end])
+	}
+	return b.String()
+}
+
+// TestOpenJoinsAWrappedLink: a long link copied from a terminal carries the terminal's line breaks
+// inside it, and the link is still the same link. Only a text that begins with a join link is
+// joined; other text is left as it is.
+func TestOpenJoinsAWrappedLink(t *testing.T) {
+	t.Parallel()
+	pub := newRig(t, cards.Visible)
+	hid := newRig(t, cards.Hidden)
+	contact := mustContact(t, pub.service(t, nil))
+	inv := mustInvite(t, hid.service(t, nil))
+	slash := strings.Replace(contact.URL, "echofog://join?", "echofog://join/?", 1)
+
+	pubNode, pubDevice := pub.ids()
+	hidNode, hidDevice := hid.ids()
+	cases := []struct {
+		name   string
+		in     string
+		kind   links.Kind
+		node   [32]byte
+		device [32]byte
+	}{
+		{"contact", wrapEvery(contact.URL, 60), links.KindContact, pubNode, pubDevice},
+		{"contact with spaces", strings.ReplaceAll(wrapEvery(contact.URL, 60), "\n", " "), links.KindContact, pubNode, pubDevice},
+		{"break before the query", strings.Replace(contact.URL, "?", "?\n", 1), links.KindContact, pubNode, pubDevice},
+		{"break inside a parameter name", strings.Replace(contact.URL, "&card=", "&\ncard=", 1), links.KindContact, pubNode, pubDevice},
+		{"web form", wrapEvery(contact.Web, 60), links.KindContact, pubNode, pubDevice},
+		{"slash form", wrapEvery(slash, 60), links.KindContact, pubNode, pubDevice},
+		{"invitation", wrapEvery(inv.URL, 60), links.KindInvitation, hidNode, hidDevice},
+	}
+	s := pub.service(t, nil)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := s.Open(tc.in)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			if p.Kind != tc.kind || p.Node != tc.node || p.Device != tc.device {
+				t.Fatalf("preview %+v", p)
+			}
+		})
+	}
+
+	// words before the link: not a link of its own, the joining is for a pasted link only
+	if _, err := links.Open("Ссылка:\n"+contact.URL, testNow); !errors.Is(err, links.ErrNotLink) {
+		t.Fatalf("text with words before the link: %v", err)
+	}
+}
+
+// TestOpenTellsADamagedCardFromOtherText: an echofog://join link whose card does not verify is a
+// damaged link, not "some other text".
+func TestOpenTellsADamagedCardFromOtherText(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, cards.Visible)
+	contact := mustContact(t, r.service(t, nil))
+	card64 := contact.URL[strings.Index(contact.URL, "card=")+5:]
+	raw, err := base64.RawURLEncoding.DecodeString(card64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := raw[1:]
+	if raw[0] == objects.LinkMethodDeflate {
+		zr := flate.NewReader(bytes.NewReader(card))
+		card, err = io.ReadAll(zr)
+		_ = zr.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	card[len(card)-1] ^= 0x01 // the signature no longer verifies
+	data := append([]byte{objects.LinkMethodRaw}, card...)
+	if len(data)%4 == 1 { // raw base64 cannot hold a length of 1 mod 4
+		data = append(data, 0)
+	}
+	bad := "echofog://join?v=2&card=" + base64.RawURLEncoding.EncodeToString(data)
+
+	_, err = links.Open(bad, testNow)
+	if !errors.Is(err, links.ErrMismatch) {
+		t.Fatalf("a damaged card: %v, want ErrMismatch", err)
+	}
+	if msg := links.UserMessage(err); !strings.Contains(msg, "повреждена") {
+		t.Fatalf("user message %q", msg)
+	}
+}
+
 func TestOpenRefusals(t *testing.T) {
 	t.Parallel()
 	pub := newRig(t, cards.Visible)
@@ -577,6 +677,7 @@ func TestUserMessages(t *testing.T) {
 		{links.ErrRevoked, "отозвана"},
 		{links.ErrNotLink, "не ссылка EchoFog"},
 		{fmt.Errorf("wrapped: %w", links.ErrNotLink), "не ссылка EchoFog"},
+		{links.ErrMismatch, "повреждена"},
 		{links.ErrExpired, "срок"},
 		{errors.New("internal detail 10.0.0.1"), ""},
 	}
