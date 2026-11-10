@@ -284,3 +284,21 @@ func TestPacketizerFramesFromTwoEncodersAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// An access unit that packs to nothing (empty, or only parameter sets, which the payloader keeps
+// back) is not queued: the pacer takes the first packet of every queued frame, and an empty one
+// used to crash it.
+func TestEmptyFrameIsNotPaced(t *testing.T) {
+	pk := newPacketizer(1200)
+	pushed := 0
+	pk.frame(false, nil, 90000, frameLayer{}, false, func(p [][]byte) { pushed += len(p) })
+	if pushed != 0 {
+		t.Fatalf("an empty access unit gave %d packets", pushed)
+	}
+	p := newPacer(func([]byte) { t.Fatal("nothing should be sent") }, 1_000_000)
+	p.push(nil)
+	p.push([][]byte{})
+	if len(p.queue) != 0 {
+		t.Fatalf("empty frames were queued: %d", len(p.queue))
+	}
+}

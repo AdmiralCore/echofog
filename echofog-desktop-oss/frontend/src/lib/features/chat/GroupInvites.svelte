@@ -246,7 +246,7 @@
   .inv-head { align-items: center; gap: 6px; }
   .link-btn { background: none; border: 0; padding: 2px 0; color: var(--accent); cursor: pointer; text-align: left; }
   .inv-make { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-  .inv-make.card { gap: 8px; padding: 14px; border-radius: 14px; background: var(--raised); border: 1px solid var(--line-soft); }
+  .inv-make.card { gap: 8px; padding: 14px; border-radius: var(--r-xl); background: var(--surface-2); border: 1px solid var(--border); }
   .field-label { font-size: 11.5px; font-weight: 650; letter-spacing: 0.03em; text-transform: uppercase; color: var(--faint); margin-top: 4px; }
   .toggle { display: flex; align-items: center; gap: 10px; margin-top: 6px; cursor: pointer; }
   .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
@@ -270,10 +270,6 @@
   .tick { width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; border: 2px solid var(--line); color: #fff; }
   .invc-row.on .tick { background: var(--accent); border-color: var(--accent); }
   .ok { color: var(--ok); display: flex; align-items: center; gap: 6px; margin: 0; }
-  .inv-opts { gap: 8px; }
-  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 4px; }
-  .check input { width: auto; }
-  .inv-opts label { display: flex; flex-direction: column; gap: 4px; }
   .inv-actions { margin-top: 6px; gap: 6px; align-items: center; }
   .inv-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
   .inv-row { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 2px 4px; border-radius: 8px; }

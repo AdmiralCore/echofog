@@ -13,6 +13,9 @@
     import { price } from '../../format.js';
     import { chosen, fixesFor, leadOf, mySide, relayHost } from '../../callpath.js';
     import Icon from '../ui/Icon.svelte';
+    import Button from '../ui/Button.svelte';
+    import Badge from '../ui/Badge.svelte';
+    import Input from '../ui/Input.svelte';
     import { t, tr } from '../../i18n/index.js';
 
     export let path;
@@ -110,7 +113,7 @@
     {/if}
 
     {#if path.relayed}
-        <p class="pop-title">{$t('callpath.why')}</p>
+        <p class="sub">{$t('callpath.why')}</p>
         <p class="text">{$t('callpath.reason.' + path.reason)}</p>
     {/if}
     {#if sides}
@@ -121,7 +124,7 @@
     {/if}
 
     {#if fixes.length}
-        <p class="pop-title">{$t('callpath.helps')}</p>
+        <p class="sub">{$t('callpath.helps')}</p>
         <ol class="fixes">
             {#each fixes as f}
                 <li>{f === 'forward' && !path.listenPort ? $t('callpath.fix.forwardAny') : $t('callpath.fix.' + f, { port: path.listenPort })}</li>
@@ -130,7 +133,7 @@
     {/if}
 
     {#if group}
-        <p class="pop-title">{$t('callpath.people')}</p>
+        <p class="sub">{$t('callpath.people')}</p>
         {#each path.members as m (m.peer)}
             <div class="member">
                 <span class="dot" class:via-relay={m.link === 'relay'} class:via-direct={m.link === 'direct'}></span>
@@ -146,88 +149,87 @@
 
     {#if path.reason !== 'anonymous'}
         <div class="sect">
-            <p class="pop-title">{$t('callpath.relays')}</p>
+            <p class="sub">{$t('callpath.relays')}</p>
             {#if path.relayed}
-                <button class="switch" disabled={!!busy || free.length < 2} on:click={() => switchTo('')}>
-                    <Icon name="refresh" size={13} /> {busy === 'switch' ? $t('callpath.switching') : $t('callpath.switch')}
-                </button>
+                <Button size="sm" icon="refresh" loading={busy === 'switch'} disabled={!!busy || free.length < 2} on:click={() => switchTo('')}>
+                    {busy === 'switch' ? $t('callpath.switching') : $t('callpath.switch')}
+                </Button>
             {/if}
         </div>
         <p class="hint">{$t('callpath.relaysHint')}</p>
         {#if relays === null}
-            <p class="pop-empty"><span class="spinner"></span> {$t('common.loading')}</p>
+            <p class="hint"><Icon name="spinner" size={13} /> {$t('common.loading')}</p>
         {:else if !free.length}
-            <p class="pop-empty">{$t('callpath.relaysEmpty')}</p>
+            <p class="hint">{$t('callpath.relaysEmpty')}</p>
         {/if}
         {#each free as r (r.peerId)}
             <div class="relay" class:sel={r.carrying > 0}>
                 <span class="mono label" title={r.addr}>{relayHost(r.addr, r.peerId)}</span>
-                {#if r.mine}<span class="chip">{$t('callpath.mine')}</span>{/if}
-                {#if r.guard}<span class="chip">{$t('callpath.guard')}</span>{/if}
+                {#if r.mine}<Badge size="sm">{$t('callpath.mine')}</Badge>{/if}
+                {#if r.guard}<Badge size="sm">{$t('callpath.guard')}</Badge>{/if}
                 <span class="rate">{r.pingMs ? $t('callpath.ms', { ms: r.pingMs }) : $t('callpath.noAnswer')}</span>
                 {#if r.pricePerMb}<span class="rate">{price(r.pricePerMb)}</span>{/if}
                 {#if r.carrying > 0}
-                    <span class="chip on">{$t('callpath.carrying')}</span>
+                    <Badge variant="accent" size="sm">{$t('callpath.carrying')}</Badge>
                 {:else if path.relayed}
-                    <button class="use" disabled={!!busy} on:click={() => switchTo(r.peerId)}>{busy === r.peerId ? $t('callpath.switching') : $t('callpath.use')}</button>
+                    <Button size="sm" loading={busy === r.peerId} disabled={!!busy} on:click={() => switchTo(r.peerId)}>{busy === r.peerId ? $t('callpath.switching') : $t('callpath.use')}</Button>
                 {/if}
             </div>
         {/each}
         {#if error}<p class="err">{error}</p>{/if}
 
-        <p class="pop-title">{$t('callpath.paid')}</p>
+        <p class="sub">{$t('callpath.paid')}</p>
         {#if paid.length}
             <p class="hint">{$t('callpath.paidHint')}</p>
             {#each paid as r (r.peerId)}
                 <div class="relay">
                     <span class="mono label">{relayHost(r.addr, r.peerId)}</span>
                     <span class="rate">{price(r.pricePerMb)}</span>
-                    <span class="chip" title={$t('callpath.soonTitle')}>{$t('callpath.soon')}</span>
+                    <span title={$t('callpath.soonTitle')}><Badge size="sm">{$t('callpath.soon')}</Badge></span>
                 </div>
             {/each}
         {:else if relays !== null}
             <p class="hint">{$t('callpath.paidNone')}</p>
         {/if}
 
-        <p class="pop-title">{$t('callpath.addTitle')}</p>
+        <p class="sub">{$t('callpath.addTitle')}</p>
         <div class="add">
-            <input class="grow" bind:value={link} placeholder="echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && addRelay()} />
-            <button class="primary" disabled={!!busy || !link.trim()} on:click={addRelay}>{busy === 'add' ? $t('callpath.adding') : $t('callpath.add')}</button>
+            <div class="grow" on:keydown={(e) => e.key === 'Enter' && addRelay()}><Input size="sm" bind:value={link} placeholder="echofog://relay/host:port/peer-id" aria-label={$t('callpath.addTitle')} /></div>
+            <Button variant="primary" size="sm" loading={busy === 'add'} disabled={!!busy || !link.trim()} on:click={addRelay}>{busy === 'add' ? $t('callpath.adding') : $t('callpath.add')}</Button>
         </div>
         {#if linkError}<p class="err">{linkError}</p>{:else if added}<p class="hint ok">{$t('callpath.added')}</p>{/if}
     {/if}
 </div>
 
 <style>
-    .path { display: flex; flex-direction: column; gap: 6px; padding: 6px 4px 8px; }
-    .head { display: flex; gap: 10px; align-items: flex-start; padding: 4px 6px 2px; }
-    .head b { font-size: 14px; }
-    .head p { margin-top: 2px; color: var(--muted); line-height: 1.4; }
-    .ic { width: 30px; height: 30px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-    .ic.warn { background: var(--warn-soft); color: var(--warn); }
-    .route, .member, .relay { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 9px; }
-    .route { background: var(--raised); margin: 0 6px; }
-    .relay.sel { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-    .hurt { margin: 2px 6px; padding: 8px 10px; border-radius: 9px; background: var(--warn-soft); color: var(--warn); line-height: 1.4; }
-    .text { margin: 0 10px; color: var(--muted); line-height: 1.45; }
-    .sides { display: flex; flex-direction: column; gap: 2px; margin: 2px 10px 0; font-size: 12px; color: var(--faint); }
-    .sides b { color: var(--muted); font-weight: 600; }
-    .fixes { margin: 0 10px 0 28px; padding: 0; list-style: decimal; display: flex; flex-direction: column; gap: 6px; color: var(--muted); line-height: 1.4; }
-    .fixes li::marker { color: var(--accent); font-weight: 700; }
+    .path { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-1) var(--sp-2); }
+    .head { display: flex; gap: var(--sp-3); align-items: flex-start; padding: var(--sp-1) var(--sp-2) 0; }
+    .head b { font-size: var(--fs-md); font-weight: var(--fw-semibold); }
+    .head p { margin-top: 2px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
+    .ic { width: 30px; height: 30px; flex: none; border-radius: var(--r-md); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-fg); }
+    .ic.warn { background: var(--warn-soft); color: var(--warn-fg); }
+    .route, .member, .relay { display: flex; align-items: center; gap: var(--sp-2); padding: 7px 10px; border-radius: var(--r-md); font-size: var(--fs-sm); }
+    .route { background: var(--surface-2); margin: 0 var(--sp-2); }
+    .relay.sel { background: var(--accent-soft); }
+    .label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rate { color: var(--muted); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); white-space: nowrap; }
+    .hurt { margin: 2px var(--sp-2); padding: 8px 10px; border-radius: var(--r-md); background: var(--warn-soft); color: var(--warn-fg); font-size: var(--fs-sm); line-height: 1.4; }
+    .text { margin: 0 var(--sp-3); color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+    .sub { margin: var(--sp-2) var(--sp-3) 0; font-size: var(--fs-2xs); font-weight: var(--fw-bold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+    .sides { display: flex; flex-direction: column; gap: 2px; margin: 2px var(--sp-3) 0; font-size: var(--fs-xs); color: var(--faint); }
+    .sides b { color: var(--muted); font-weight: var(--fw-semibold); }
+    .fixes { margin: 0 var(--sp-3) 0 28px; padding: 0; list-style: decimal; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; }
+    .fixes li::marker { color: var(--accent-fg); font-weight: var(--fw-bold); }
     .dot { width: 8px; height: 8px; flex: none; border-radius: 999px; background: var(--faint); }
     .dot.via-direct { background: var(--ok); }
     .dot.via-relay { background: var(--accent); }
-    .sect { display: flex; align-items: center; justify-content: space-between; padding-right: 6px; }
-    .switch { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; font-size: 12px; }
-    .hint { margin: 0 10px; font-size: 11.5px; line-height: 1.4; color: var(--faint); }
-    .hint.ok { color: var(--ok); }
-    .err { margin: 0 10px; font-size: 12px; color: var(--danger); }
-    .chip { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; background: var(--raised); color: var(--muted); }
-    .chip.on { background: var(--accent-soft); color: var(--accent); }
-    .use { flex: none; height: 24px; padding: 0 9px; font-size: 11.5px; }
-    .add { display: flex; gap: 6px; padding: 0 6px; }
-    .add input { min-width: 0; height: 32px; padding: 4px 10px; font-size: 12px; }
-    .add button { height: 32px; padding: 0 12px; font-size: 12px; }
+    .sect { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding-right: var(--sp-2); }
+    .sect .sub { margin-bottom: 0; }
+    .hint { margin: 0 var(--sp-3); font-size: var(--fs-xs); line-height: 1.4; color: var(--faint); display: flex; gap: 6px; align-items: center; }
+    .hint.ok { color: var(--ok-fg); }
+    .err { margin: 0 var(--sp-3); font-size: var(--fs-xs); color: var(--danger-fg); }
+    .add { display: flex; gap: var(--sp-2); padding: 0 var(--sp-2); align-items: flex-start; }
+    .add .grow { min-width: 0; }
     .faint { flex: none; color: var(--faint); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--fs-xs); }
 </style>

@@ -4,6 +4,7 @@
   import Auth from './lib/views/Auth.svelte';
   import Shell from './lib/views/Shell.svelte';
   import Dialog from './lib/components/ui/Dialog.svelte';
+  import Toast from './lib/components/ui/Toast.svelte';
   import StreamLogDialog from './lib/components/call/StreamLogDialog.svelte';
   import PaymentPassword from './lib/components/PaymentPassword.svelte';
   import { finishedLog } from './lib/services/streamlog.js';
@@ -27,6 +28,7 @@
   <Auth />
 {/if}
 <Dialog />
+<Toast />
 <PaymentPassword />
 
 <style>

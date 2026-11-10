@@ -147,6 +147,20 @@
     await setPhoto(b64);
   }
 
+  // members grouped by role: the owner first, then the group's roles in their order, others last
+  $: roleOrder = ['owner', ...roles.map((r) => r.id)];
+  $: roleGroups = (() => {
+    const by = new Map();
+    for (const m of members) {
+      if (!by.has(m.role)) by.set(m.role, []);
+      by.get(m.role).push(m);
+    }
+    const rank = (id) => { const i = roleOrder.indexOf(id); return i < 0 ? 999 : i; };
+    return [...by.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(([id, list]) => ({
+      id, title: list[0].roleTitle, list: [...list].sort((a, b) => Number(!!b.online) - Number(!!a.online)),
+    }));
+  })();
+
   $: firstTs = $hasOlder ? 0 : $messages.find((m) => !m.system)?.ts || 0;
   $: savedHere = [...$savedIds].filter((id) => id.startsWith(conv.id + '/')).length;
   $: msgCount = $messages.filter((m) => !m.system && !m.deleted).length;
@@ -226,7 +240,10 @@
     <div class="block">
       <div class="eyebrow">{$t('chats.membersCount', { n: members.length })}</div>
       <div class="members">
-        {#each members as m (m.peerId)}
+        {#each roleGroups as g (g.id)}
+        <div class="role-group">
+          <div class="role-head">{#if roleColor(g.id)}<span class="rd" style:background={roleColor(g.id)}></span>{/if}{$t('chats.roleCount', { role: roleLabel(g.id, g.title), n: g.list.length })}</div>
+        {#each g.list as m (m.peerId)}
           <div class="member">
             <div class="row">
               <span class="av" title={m.online ? $t('common.online') : $t('common.offline')}>
@@ -262,6 +279,8 @@
               {/if}
             {/if}
           </div>
+        {/each}
+        </div>
         {/each}
       </div>
     </div>
@@ -316,25 +335,25 @@
   .more-files { margin-top: 6px; }
   .role-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .role-select {
-    appearance: none; -webkit-appearance: none; width: auto; height: 28px; padding: 0 26px 0 12px; border-radius: 99px;
-    font-size: 12.5px; font-weight: 600; cursor: pointer; background-color: var(--raised); border: 1px solid var(--line-soft);
+    appearance: none; -webkit-appearance: none; width: auto; height: var(--ctl-sm); padding: 0 26px 0 10px; border-radius: var(--r-md);
+    font-size: var(--fs-xs); font-weight: var(--fw-semibold); cursor: pointer; background-color: var(--surface-2); border: 1px solid var(--border);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 9px center;
   }
   .role-select:hover:not(:disabled) { border-color: var(--line); background-color: var(--hover); }
   .role-select option { color: var(--text); }
-  .to-chip { display: inline-flex; color: var(--warn, #f5a524); }
+  .to-chip { display: inline-flex; color: var(--warn); }
   .to-opts { flex-wrap: wrap; }
   .pic { position: relative; padding: 0; border: none; background: transparent; border-radius: 50%; }
   .pic:hover:not(:disabled) { background: transparent; border: none; filter: brightness(1.08); }
-  .pic-edit { position: absolute; right: 0; bottom: 0; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--panel); border: 2px solid var(--line); color: var(--muted); }
+  .pic-edit { position: absolute; right: 0; bottom: 0; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-1); border: 2px solid var(--border-strong); color: var(--muted); }
   .del { display: flex; flex-direction: column; gap: 8px; padding: 22px; }
   .del-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 8px; }
-  .del-head h3 { margin: 0 0 4px; font-size: 16px; }
-  .del-ico { width: 38px; height: 38px; flex: none; border-radius: 12px; display: grid; place-items: center; background: var(--danger-soft); color: var(--danger); }
+  .del-head h3 { margin: 0 0 4px; font-size: var(--fs-lg); }
+  .del-ico { width: 36px; height: 36px; flex: none; border-radius: var(--r-lg); display: grid; place-items: center; background: var(--danger-soft); color: var(--danger); }
   .del-name { user-select: all; word-break: break-word; }
   .del-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-  .del-actions button { min-width: 96px; height: 38px; }
-  .del .ghost { background: var(--raised); color: var(--text); border: 1px solid var(--line-soft); }
-  .del .danger { background: var(--danger); color: #fff; border: none; }
+  .del-actions button { min-width: 96px; height: var(--ctl-lg); }
+  .del .ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+  .del .danger { background: var(--danger); color: var(--danger-ink); border: none; }
 </style>

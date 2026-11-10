@@ -82,7 +82,7 @@ function freshState(prev = {}) {
     sourcePicker: null,    // { sources } while the user picks what to share
     // where a broadcaster's camera sits over their screen, for us: shape, place as fractions of the
     // free room, width as a fraction of the tile, or hidden
-    pip: prev.pip || { shape: 'circle', x: 1, y: 1, w: 0.2, hidden: false, ...loadPrefs().pip },
+    pip: prev.pip || { shape: 'rounded', x: 1, y: 1, w: 0.2, hidden: false, ...loadPrefs().pip },
     notice: null,
   };
 }

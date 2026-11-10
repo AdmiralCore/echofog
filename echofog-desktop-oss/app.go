@@ -56,6 +56,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	runtime.LogInfo(ctx, "Wails frontend connected via bridge")
 	a.serveLinkHandoff(ctx)
+	go a.followDisplayRate(ctx)
 }
 
 // Safe helpers

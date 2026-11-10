@@ -45,6 +45,7 @@ export namespace convlog {
 	    id: string;
 	    name: string;
 	    size: number;
+	    root?: string;
 	    mime?: string;
 	    thumb?: string;
 	    w?: number;
@@ -59,6 +60,7 @@ export namespace convlog {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.size = source["size"];
+	        this.root = source["root"];
 	        this.mime = source["mime"];
 	        this.thumb = source["thumb"];
 	        this.w = source["w"];
@@ -948,6 +950,8 @@ export namespace node {
 	        this.restart = source["restart"];
 	        this.hasProxy = source["hasProxy"];
 	        this.hasRelay = source["hasRelay"];
+	        this.relayAvailable = source["relayAvailable"];
+	        this.relayNote = source["relayNote"];
 	    }
 	}
 	export class BootstrapNode {
@@ -1159,6 +1163,8 @@ export namespace node {
 	    overrides?: convlog.Override[];
 	    unread: number;
 	    lastTs: number;
+	    mentions?: number;
+	    last?: convlog.Message;
 	    canSend: boolean;
 	    canJoin: boolean;
 	    call?: GroupCall;
@@ -1182,6 +1188,8 @@ export namespace node {
 	        this.overrides = this.convertValues(source["overrides"], convlog.Override);
 	        this.unread = source["unread"];
 	        this.lastTs = source["lastTs"];
+	        this.mentions = source["mentions"];
+	        this.last = this.convertValues(source["last"], convlog.Message);
 	        this.canSend = source["canSend"];
 	        this.canJoin = source["canJoin"];
 	        this.call = this.convertValues(source["call"], GroupCall);
@@ -1421,6 +1429,7 @@ export namespace node {
 	    last?: convlog.Message;
 	    lastTs: number;
 	    unread: number;
+	    mutedUntil?: number;
 	    request: boolean;
 	    upgraded: boolean;
 	    kind: string;
@@ -1448,6 +1457,7 @@ export namespace node {
 	        this.last = this.convertValues(source["last"], convlog.Message);
 	        this.lastTs = source["lastTs"];
 	        this.unread = source["unread"];
+	        this.mutedUntil = source["mutedUntil"];
 	        this.request = source["request"];
 	        this.upgraded = source["upgraded"];
 	        this.kind = source["kind"];
@@ -1481,6 +1491,40 @@ export namespace node {
 		    }
 		    return a;
 		}
+	}
+	export class ExitClientDTO {
+	    id: string;
+	    label: string;
+	    byLink: boolean;
+	    streams: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExitClientDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.byLink = source["byLink"];
+	        this.streams = source["streams"];
+	    }
+	}
+	export class ExitKnownDTO {
+	    id: string;
+	    label: string;
+	    since: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExitKnownDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.since = source["since"];
+	    }
 	}
 	export class ExitNode {
 	    peerId: string;
@@ -1566,6 +1610,24 @@ export namespace node {
 	        this.paysByVault = source["paysByVault"];
 	    }
 	}
+	export class ExitWaitDTO {
+	    id: string;
+	    since: number;
+	    last: number;
+	    tries: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExitWaitDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.since = source["since"];
+	        this.last = source["last"];
+	        this.tries = source["tries"];
+	    }
+	}
 	
 	export class GroupDTO {
 	    id: string;
@@ -1577,6 +1639,7 @@ export namespace node {
 	    createdAt: number;
 	    members: number;
 	    myRole: string;
+	    closed?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GroupDTO(source);
@@ -1593,6 +1656,7 @@ export namespace node {
 	        this.createdAt = source["createdAt"];
 	        this.members = source["members"];
 	        this.myRole = source["myRole"];
+	        this.closed = source["closed"];
 	    }
 	}
 	export class GroupFileDTO {
@@ -2203,6 +2267,46 @@ export namespace node {
 	        this.socketBufferMb = source["socketBufferMb"];
 	    }
 	}
+	export class SharingAccess {
+	    link: string;
+	    web: string;
+	    anyUntil: number;
+	    clients: ExitClientDTO[];
+	    waiting: ExitWaitDTO[];
+	    confirmed: ExitKnownDTO[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SharingAccess(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.link = source["link"];
+	        this.web = source["web"];
+	        this.anyUntil = source["anyUntil"];
+	        this.clients = this.convertValues(source["clients"], ExitClientDTO);
+	        this.waiting = this.convertValues(source["waiting"], ExitWaitDTO);
+	        this.confirmed = this.convertValues(source["confirmed"], ExitKnownDTO);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SharingConfig {
 	    pricePerMb: number;
 	    freeTestKb: number;
@@ -2234,7 +2338,7 @@ export namespace node {
 	    paymentsReady: boolean;
 	    payAddress: string;
 	    earnedUsdt: string;
-	    access?: any;
+	    access?: SharingAccess;
 	
 	    static createFrom(source: any = {}) {
 	        return new SharingStatus(source);
@@ -2254,7 +2358,7 @@ export namespace node {
 	        this.paymentsReady = source["paymentsReady"];
 	        this.payAddress = source["payAddress"];
 	        this.earnedUsdt = source["earnedUsdt"];
-	        this.access = source["access"];
+	        this.access = this.convertValues(source["access"], SharingAccess);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

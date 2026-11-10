@@ -127,10 +127,14 @@ const (
 	vtBool = 11
 )
 
+// mfStartup initializes Media Foundation for this process. It may be called any number of times:
+// the platform counts the calls.
 func mfStartup() error {
 	return procCall(procMFStartup, 0x20070 /* MF_VERSION */, 0 /* MFSTARTUP_FULL */).err("MFStartup")
 }
 
+// setU32, setU64, setGUID, getU32, getU64 and getString read and write attributes of an IMFAttributes:
+// a media type, a sample, or an encoder's activation object.
 func setU32(attrs unsafe.Pointer, key *windows.GUID, v uint32) error {
 	return comCall(attrs, attrSetUINT32, uintptr(unsafe.Pointer(key)), uintptr(v)).err("SetUINT32")
 }
@@ -237,6 +241,7 @@ const encoderQuality = 33
 // most 0.6 VMAF in the same measurement.
 var rateBuffer = 100 * time.Millisecond
 
+// bufferBits is the rate buffer, in bits, for a bitrate: rateBuffer of it.
 func bufferBits(bps uint64) uint64 { return bps * uint64(rateBuffer/time.Millisecond) / 1000 }
 
 // newMFEncoder opens the first hardware H.264 encoder of the device's adapter that takes NV12
@@ -269,6 +274,10 @@ func newMFEncoder(d *device, width, height, fps, bitrateKbps, quality, layers in
 	return nil, errors.Join(errs...)
 }
 
+// openMFEncoder activates one candidate MFT and gets it ready: unlocks its asynchronous mode, hands it
+// the device manager (so frames stay on the GPU), sets what the stream needs through ICodecAPI, sets the
+// media types and starts its event loop. On any failure what it opened is released again and the next
+// candidate is tried by newMFEncoder.
 func openMFEncoder(d *device, act unsafe.Pointer, name string, width, height, fps, bitrateKbps, quality, layers int, out func(encodedFrame)) (*mfEncoder, error) {
 	e := &mfEncoder{name: name, width: width, height: height, fps: fps, out: out, inFlight: make(map[int64]time.Time),
 		asked: make(chan struct{}, 1), done: make(chan struct{})}
@@ -381,6 +390,8 @@ func (e *mfEncoder) enableTemporalLayers(want int) int {
 	return want
 }
 
+// setCodec sets one ICodecAPI property. It reports false when the encoder does not take it (they
+// silently differ in what they support, so a refusal is not an error) or when it is already closed.
 func (e *mfEncoder) setCodec(key *windows.GUID, vt uint16, val uint64) bool {
 	if e.codec == nil {
 		return false // closed
@@ -389,6 +400,7 @@ func (e *mfEncoder) setCodec(key *windows.GUID, vt uint16, val uint64) bool {
 	return comCall(e.codec, codecSetValue, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(&v))) >= 0
 }
 
+// videoType makes a video media type of a subtype with the stream's size, rate and color.
 func (e *mfEncoder) videoType(subtype *windows.GUID) (unsafe.Pointer, error) {
 	var t unsafe.Pointer
 	if err := procCall(procMFCreateMediaType, uintptr(unsafe.Pointer(&t))).err("MFCreateMediaType"); err != nil {
@@ -413,6 +425,9 @@ func (e *mfEncoder) describe(t unsafe.Pointer) {
 	_ = setU32(t, &mfMTTransferFunction, 5)
 }
 
+// setTypes sets the encoder's output type (H.264, High profile, the bitrate) and then its input
+// type, which must be one it offers for NV12 with our size and color on it; the order is the one the
+// asynchronous H.264 encoders accept.
 func (e *mfEncoder) setTypes() error {
 	ot, err := e.videoType(&mfVideoFormatH264)
 	if err != nil {
@@ -503,6 +518,10 @@ func (e *mfEncoder) setBitrate(bps uint32) {
 	}
 }
 
+// eventLoop runs on a goroutine of its own and is the only place that talks to the encoder's event
+// queue. METransformNeedInput adds a credit (the encoder wants a frame; a waiting send is woken
+// through asked), METransformHaveOutput collects the compressed frame (output). It ends when the
+// queue ends (shutdown) or fails, and closes done.
 func (e *mfEncoder) eventLoop() {
 	defer close(e.done)
 	undo, err := mtaThread()
@@ -544,6 +563,7 @@ func (e *mfEncoder) eventLoop() {
 	}
 }
 
+// fail records the first error that stopped the encoder; the stream's once-a-second check reads it.
 func (e *mfEncoder) fail(err error) { e.err.CompareAndSwap(nil, &err) }
 
 // failed returns the error that stopped the encoder, if any.
@@ -554,6 +574,10 @@ func (e *mfEncoder) failed() error {
 	return nil
 }
 
+// output collects one compressed frame from the encoder (it provides the sample, or we hand it a
+// buffer, as it says), turns it into Annex-B with parameter sets before every IDR, finds out whether it
+// is a keyframe and which temporal layer it is, and passes it to the stream's callback. The encoder's
+// new-output-type request (some do that once, before the first frame) is answered here.
 func (e *mfEncoder) output() error {
 	var buf struct {
 		StreamID uint32
@@ -671,6 +695,10 @@ func (e *mfEncoder) drain(timeout time.Duration) {
 	}
 }
 
+// close stops the encoder and releases it. Order matters: flush, stop streaming, drop the device
+// manager, shut the MFT down (which ends the event queue and so the event loop), wait for the loop, and
+// only then release. An asynchronous encoder works on threads of its own: releasing one a thread is
+// still using took the process down.
 func (e *mfEncoder) close() {
 	if e.mft != nil {
 		comCall(e.mft, mftProcessMessage, mftMessageCommandFlush, 0)
@@ -688,7 +716,8 @@ func (e *mfEncoder) close() {
 			select {
 			case <-e.done:
 			case <-time.After(2 * time.Second):
-				e.codec, e.events, e.mft, e.activate, e.manager = nil, nil, nil, nil, nil // leaked, not freed under it
+				// Leaked, not freed under the loop. The fields stay as they are: the loop reads
+				// e.events and e.mft on every turn, and a nil there is a crash.
 				return
 			}
 		}

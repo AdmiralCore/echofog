@@ -1,9 +1,3 @@
-// Package nativecap is the app's own screen capture for streams: Windows.Graphics.Capture keeps
-// frames on the GPU, the video engine converts them to NV12 and a hardware H.264 encoder (Media
-// Foundation) compresses them; the result goes into the call as RTP, as if the webview had sent
-// it. It exists because the webview's own capture copies every frame through system memory and
-// holds itself to half a CPU core, which keeps a screen at 30-50 fps. Elsewhere than on Windows,
-// and where any piece is missing, Available reports false and the app shares through the webview.
 package nativecap
 
 import "time"
@@ -110,6 +104,8 @@ type frameClock struct {
 	owed     bool      // a beat passed with nothing new
 }
 
+// newFrameClock makes a clock for a stream of fps frames a second whose first beat is one interval
+// from now.
 func newFrameClock(fps int, now time.Time) *frameClock {
 	iv := time.Second / time.Duration(max(fps, 1))
 	return &frameClock{interval: iv, next: now.Add(iv), last: now}

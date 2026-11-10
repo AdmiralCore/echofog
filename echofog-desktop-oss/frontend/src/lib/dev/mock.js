@@ -4,6 +4,15 @@
 // transceiver layout as the Pion bridge, fed by synthetic voices and canvas video, so the
 // UI's slot mapping, per-speaker audio and stream tiles are exercised for real.
 import { callService } from '../services/call.service.js';
+import { theme } from '../stores/theme.js';
+import { locale } from '../i18n/index.js';
+
+// ?theme=light|dark and ?lang=en|ru choose the look of a screenshot without touching the saved choice
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get('theme')) theme.set(q.get('theme'));
+  if (q.get('lang')) locale.set(q.get('lang'));
+}
 
 // deterministic pseudo-random 32-byte IDs, so avatar colours look like real sha256 peer IDs
 const hex = (seed) => {
@@ -456,7 +465,9 @@ const rememberMock = (() => {
 })();
 // "start with Windows": ?autostart starts it on; ?autostart=other has Windows start another copy,
 // ?autostart=blocked has it switched off in the Windows startup apps
-const protocolMock = { running: 1, next: 1 };
+// ?v2: the build runs on protocol 2 (the screens of protocol 2 show: exit access, notices, entry nodes)
+const V2 = new URLSearchParams(location.search).has('v2');
+const protocolMock = { running: V2 ? 2 : 1, next: V2 ? 2 : 1 };
 const autostartMock = (() => {
   const v = new URLSearchParams(location.search).get('autostart');
   return { on: v === '' || v === 'other', other: v === 'other', blocked: v === 'blocked' };
@@ -464,7 +475,12 @@ const autostartMock = (() => {
 const impl = {
   GetProfiles: () => ['demo'],
   AppVersion: () => '0.1.0',
-  CheckForUpdate: () => ({ current: '0.1.0', latest: '0.1.1', url: 'https://github.com/AdmiralCore/EchoFog/releases/tag/v0.1.1', newer: true }),
+  // ?update=manifest|important: protocol 2 tells of a release from its signed manifest
+  CheckForUpdate: () => {
+    const u = new URLSearchParams(location.search).get('update');
+    const base = { current: '0.1.0', latest: '0.1.1', url: 'https://github.com/AdmiralCore/EchoFog/releases/tag/v0.1.1', newer: true };
+    return u ? { ...base, manifest: true, important: u === 'important', components: ['app', 'core'] } : base;
+  },
   SelectProfile: () => null,
   // ?mock&fresh walks the first-run path: create, recovery phrase, access choice
   IsRegistered: () => !new URLSearchParams(location.search).has('fresh'),
@@ -626,11 +642,11 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
   DeleteContact: (id) => { contacts.splice(contacts.findIndex((c) => c.peer_id === id), 1); return null; },
   GetSharingStatus: () => ({ ...sharingMock }),
   StartSharing: (cfg) => { Object.assign(sharingMock, { enabled: true, config: { ...cfg, freePeers: cfg.freePeers || sharingMock.config.freePeers }, lastPublish: sec(Date.now()) }); return null; },
-  SharingApprove: () => null,
-  SharingReject: () => null,
-  SharingRevoke: () => null,
-  SharingOpenFor: () => null,
-  SharingCloseOpen: () => null,
+  SharingApprove: (id, label) => { const a = sharingMock.access; if (a) { a.waiting = a.waiting.filter((w) => w.id !== id); a.confirmed = [...a.confirmed, { id, label }]; } return null; },
+  SharingReject: (id) => { const a = sharingMock.access; if (a) a.waiting = a.waiting.filter((w) => w.id !== id); return null; },
+  SharingRevoke: (id) => { const a = sharingMock.access; if (a) a.confirmed = a.confirmed.filter((k) => k.id !== id); return null; },
+  SharingOpenFor: (min) => { if (sharingMock.access) sharingMock.access.anyUntil = sec(Date.now()) + min * 60; return null; },
+  SharingCloseOpen: () => { if (sharingMock.access) sharingMock.access.anyUntil = 0; return null; },
   SetExitFreePeers: (ids) => { if (ids.some((x) => !HEX64.test(x))) throw new Error('not a peer ID (64 hex characters)'); sharingMock.config.freePeers = [...ids]; return null; },
   // relays: what this computer does for others, its link, and the relays it uses (?nat=1 shows the no-link case)
   GetRelayStatus: () => relayStatus(),
@@ -1006,7 +1022,7 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
     Object.assign(vaultMock, { closing: false, withdrawAt: 0, depositTon: '0' });
     r('e5…mock');
   }, 700)),
-  GetVoucherEarnings: () => ({ owedTon: '0.7412', cashedTon: '1.2875', quoteNano: 9800000, claimProblem: 'the node wallet has no TON to pay the fee for cashing vouchers', walletAddr: 'UQBmockWalletAddressForGas0000000000000000000000' }),
+  GetVoucherEarnings: () => V2 ? { owedTon: '0', cashedTon: '0', quoteNano: 0, claimProblem: '', walletAddr: '' } : ({ owedTon: '0.7412', cashedTon: '1.2875', quoteNano: 9800000, claimProblem: 'the node wallet has no TON to pay the fee for cashing vouchers', walletAddr: 'UQBmockWalletAddressForGas0000000000000000000000' }),
   GetTonTopUpLink: (a) => 'ton://transfer/UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ' + (a ? `?amount=${Math.round(Number(a) * 1e9)}` : ''),
 };
 
@@ -1109,7 +1125,19 @@ const accessLink = () => {
   const r = accessMock.mode === 'public' ? '' : '&r=' + encodeURIComponent('relay.example.org:4001/' + hex(12));
   return `echofog://join?v=1&net=echofog&p=101&id=${SELF}${s}&a=${encodeURIComponent('203.0.113.7:51234')}${r}`;
 };
-const sharingMock = { enabled: false, config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0, freePeers: [BOB] }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
+const sharingMock = { enabled: V2 && new URLSearchParams(location.search).has('access'), config: { pricePerMb: 49, freeTestKb: 512, uploadKbps: 0, freePeers: [BOB] }, lastPublish: 0, expiresAt: 0, lastError: '', accepted: 12, refused: 1, bytes: 734003200, paymentsReady: true, payAddress: '', earnedUsdt: '0.84' };
+// protocol 2: the exit is free; who may use it (T10.9): the link, who is connected, who waits for a decision
+if (V2) {
+  sharingMock.config = { ...sharingMock.config, pricePerMb: 0, freeTestKb: 0 };
+  sharingMock.paymentsReady = false;
+  sharingMock.access = {
+    link: 'echofog://join?v=2&card=Zm9yIHRoZSBwcmV2aWV3IG9ubHk',
+    clients: [{ id: hex(21), label: 'Alice', byLink: false, streams: 4 }, { id: hex(22), label: '', byLink: true, streams: 1 }],
+    waiting: [{ id: hex(23), tries: 3, last: sec(Date.now()) - 240 }],
+    confirmed: [{ id: hex(21), label: 'Alice' }],
+    anyUntil: 0,
+  };
+}
 const supportMock = { available: true, percent: 5, pendingTon: '0', pendingUsdt: '0.35', address: 'UQ-project-mock' };
 const payMock = { active: true, canPay: true, pricePerGb: '0.05', remainingGb: 0.2, needsPayment: true, autoPay: false, chunkUsdt: '1', chunkGb: 20, dailyCapUsdt: '5', spentTodayUsdt: '0', payAsset: 'auto', takesTon: true, chunkTon: '0.311', pending: false, note: '', lastError: '', paysByVault: true };
 // ?exit=disabled|quota|unreachable: the exit refuses to serve us after connecting; ?exit=switch: it
@@ -1312,7 +1340,7 @@ const spaceChans = {
     { id: 'design', name: 'design', voice: false, position: 1, slowSecs: 30 },
     { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
     { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
-    { id: 'stream', name: 'Stream', voice: true, position: 1 },
+    { id: 'stream', name: 'Stream', voice: true, stream: true, position: 1 },
   ],
 };
 // the main channel's settings, and the roles a group defined, by group
@@ -1342,6 +1370,9 @@ const groupRoles = { [GROUP]: { helper: { id: 'helper', title: 'Helper', color: 
   );
 })();
 const chanUnread = { dev: 2, design: 1 };
+// protocol 2 (T11.3e): a text channel carries its last message and how many unread ones mention me
+const chanMentions = { dev: 1 };
+const chanLast = { dev: { id: 'cl1', author: BOB, text: 'The build is green, merging', ts: Date.now() - 12 * 60000 }, design: { id: 'cl2', author: ALICE, text: 'New palette is in the shared file', ts: Date.now() - 55 * 60000 } };
 
 // a photo Alice sent, with the thumbnail that travels with the offer
 (function seedPhoto() {
@@ -1448,7 +1479,7 @@ Object.assign(impl, {
     const g = groups.find((x) => x.id === ref.id);
     const manager = ['owner', 'admin'].includes(g?.myRole);
     return (spaceChans[ref.id] || []).slice().sort((a, b) => (a.position || 0) - (b.position || 0))
-      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: 0, canSend: !ch.category && (!ch.readOnly || manager), canJoin: !!ch.voice, call: ch.voice ? ch.call : undefined }));
+      .map((ch) => ({ ...ch, unread: chanUnread[ch.id] || 0, lastTs: chanLast[ch.id]?.ts || 0, mentions: chanMentions[ch.id] || 0, last: ch.voice || ch.category ? undefined : chanLast[ch.id], canSend: !ch.category && (!ch.readOnly || manager), canJoin: !!ch.voice, call: ch.voice ? ch.call : undefined }));
   },
   ChatChannelSave: (ref, spec) => {
     const g = groups.find((x) => x.id === ref.id);
@@ -1627,4 +1658,55 @@ if (new URLSearchParams(location.search).has('missed')) {
   }, 200);
 }
 
+
+// ?mock&streamchannel: a model of a stream channel (video, chat by role, moderation) over the app.
+// There is no core behind it; the screen exists only here, so a real build never has it.
+if (new URLSearchParams(location.search).has('streamchannel')) {
+  const roles = { viewer: { tone: 'neutral' }, booster: { tone: 'accent' }, moderator: { tone: 'info' }, owner: { tone: 'warn' } };
+  const people = [
+    { id: 'alice', name: 'Alice Moreau', role: 'owner', onStage: true },
+    { id: 'bob', name: 'Bob Ivanov', role: 'moderator', onStage: true },
+    { id: 'nina', name: 'Nina Park', role: 'booster' },
+    { id: 'marco', name: 'Marco Rossi', role: 'viewer' },
+    { id: 'tom', name: 'Tom Berg', role: 'viewer' },
+    { id: 'eva', name: 'Eva Lind', role: 'booster' },
+  ];
+  const lines = [
+    ['nina', 'Cool boss design, which game is this?'], ['marco', 'What graphics preset is it?'], ['bob', 'Please keep spoilers out of the chat'],
+    ['alice', 'Phase 2, attempt 12. Wish me luck'], ['tom', 'How many attempts so far?'], ['eva', 'Two hours in, he is persistent'],
+  ];
+  const at = Date.now();
+  const messages = lines.map(([from, text], i) => ({ from, text, at: at - (lines.length - i) * 40000 }));
+  Promise.all([import('../components/call/StreamChannel.svelte'), import('../stores/chats.js'), import('svelte/store')]).then(async ([{ default: StreamChannel }, chatStore, { get }]) => {
+    // the model sits where the chat does: the group's channels column stays at the left
+    for (let i = 0; i < 40 && !get(chatStore.chats).some((c) => c.kind === 'group'); i++) await new Promise((r) => setTimeout(r, 100));
+    const group = get(chatStore.chats).find((c) => c.kind === 'group');
+    if (group) await chatStore.openChat(group.id);
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:9000';
+    document.body.appendChild(host);
+    const place = () => { const bar = document.querySelector('.chanbar'); host.style.left = bar ? Math.round(bar.getBoundingClientRect().right) + 'px' : '0'; };
+    await new Promise((r) => setTimeout(r, 400));
+    place();
+    window.addEventListener('resize', place);
+    const view = new StreamChannel({ target: host, props: { data: { title: 'Boss raid, phase 2 · attempt 12', channel: 'Game night', space: group ? group.name : '', host: 'Alice Moreau', viewers: 1248, roles, people, messages }, onClose: () => { window.removeEventListener('resize', place); view.$destroy(); host.remove(); } } });
+  });
+}
+
 console.info('[wails-mock] fake Go core active');
+
+// ?notice=update|no-domestic-entry|release-unavailable|no-cover|clock-skew: a notice of the protocol 2 runtime
+// (the banner); ?errscreen=other-version|no-cover|free-quota-used: the full-screen error of a failed action.
+for (const [flag, event, shape] of [
+  ['notice', 'app:notice', (v) => ({ kind: v, text: '' })],
+  ['errscreen', 'app:error-screen', (v) => ({ code: v, title: '', text: '' })],
+]) {
+  const v = new URLSearchParams(location.search).get(flag);
+  if (v) {
+    const wait = setInterval(() => {
+      if (!listeners.get(event)?.size) return;
+      clearInterval(wait);
+      setTimeout(() => emit(event, shape(v)), 1200);
+    }, 200);
+  }
+}

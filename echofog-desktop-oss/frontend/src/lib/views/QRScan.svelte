@@ -2,6 +2,7 @@
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { Html5Qrcode } from 'html5-qrcode';
   import { t } from '../i18n/index.js';
+  import Button from '../components/ui/Button.svelte';
 
   const dispatch = createEventDispatcher();
   let reader;
@@ -39,12 +40,12 @@
   {:else}
     <p class="small muted">{$t('chats.qr.hint')}</p>
   {/if}
-  <button on:click={() => dispatch('close')}>{$t('common.cancel')}</button>
+  <Button on:click={() => dispatch('close')}>{$t('common.cancel')}</Button>
 </div>
 
 <style>
   .scan { padding: 4px 12px 12px; }
-  #qr-reader { width: 100%; min-height: 200px; background: #000; border-radius: var(--radius); overflow: hidden; }
+  #qr-reader { width: 100%; min-height: 200px; background: #000; border-radius: var(--r-lg); overflow: hidden; }
   :global(#qr-reader video) { width: 100% !important; object-fit: cover; }
   :global(#qr-reader__dashboard_section_csr), :global(#qr-reader__dashboard_section_swaplink) { display: none !important; }
 </style>
