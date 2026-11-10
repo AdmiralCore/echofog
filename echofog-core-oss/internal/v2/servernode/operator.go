@@ -39,6 +39,10 @@ type StatusInfo struct {
 	ListEntry string   `json:"list_entry,omitempty"`
 	Warnings  []string `json:"warnings,omitempty"`
 	Listen    []string `json:"listen,omitempty"`
+	// Entry is the permanent entry line when the profile has exactly one noise3 listener;
+	// Entries holds them all (T5.5). They are a shared secret for the operator's own clients.
+	Entry   string   `json:"entry,omitempty"`
+	Entries []string `json:"entries,omitempty"`
 	// CoverCertNotAfter is the expiry of the cover certificate the running node serves, as Unix
 	// seconds; zero when no certificate is installed yet. The doctor reports its term.
 	CoverCertNotAfter int64 `json:"cover_cert_not_after,omitempty"`

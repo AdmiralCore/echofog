@@ -213,6 +213,22 @@ to have TCP and the disguise from the start.
   **Proxy → Relay → Relays you use**; another node uses `--relays host:port/<peer id>`. You add their
   peer IDs to `--relay-allow`.
 
+### Permanent entry line (v2)
+
+A v2 node prints a permanent entry line for its own clients:
+
+```bash
+echofog-node v2 entry --data /data
+noise3://203.0.113.10:443?mask=<public mask key>&device=<device id>
+```
+
+There is one line per `noise3` listener. `mask` is the **public** masking key of the profile; the
+private key never leaves the node. `echofog-node v2 status --json` shows the same lines in
+`entry`/`entries`.
+
+**This line is a shared secret for your clients: anyone who has it can reach the node, and it does
+not expire. Do not publish it.**
+
 ## Bandwidth and cost
 
 A signaling node costs almost nothing. A relay is different: it forwards calls, and video uses a
