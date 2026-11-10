@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/echofog/echofog-core/internal/testutil"
 	"github.com/echofog/echofog-core/internal/v2/carrier"
 	"github.com/echofog/echofog-core/internal/v2/carrier/memcarrier"
 	"github.com/echofog/echofog-core/internal/v2/mailbox"
@@ -246,10 +247,16 @@ func TestChatNodeKeepsAQueueOnItsMailboxRelay(t *testing.T) {
 	if err != nil || st != mailbox.StatusStored {
 		t.Fatalf("deposit: %d %v", st, err)
 	}
-	if err := node.MailboxReceiverTick(rcpt.rt, context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if n := node.MailboxItems(w.m.rt); n != 0 {
-		t.Fatalf("M still holds %d items: the chat service did not take them", n)
+	// The receiver runs its ticks on a timer in the runtime: one tick is not a promise that the
+	// queue is empty, the item is acknowledged once the chat service has handled it.
+	deadline := time.Now().Add(testutil.Slow(5 * time.Second))
+	for node.MailboxItems(w.m.rt) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("M still holds %d items: the chat service did not take them", node.MailboxItems(w.m.rt))
+		}
+		if err := node.MailboxReceiverTick(rcpt.rt, context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
