@@ -11,16 +11,19 @@ const count = (text, needle) => text.split(needle).length - 1;
 // on screen at once would say the same thing twice
 test('a personal card is on screen only while the personal list is in place', () => {
   const cases = [
-    ['chats', true, false, true], // the list of chats is in place
-    ['chats', false, false, false], // a space shows its channels instead
-    ['chats', true, true, false], // the column is folded to a strip
-    ['chats', false, true, false],
-    ['proxy', true, false, false], // another section: no chat list on screen
-    ['wallet', true, true, false],
-    ['settings', true, false, false],
+    ['chats', true, false, false, true], // the list of chats is in place
+    ['chats', true, false, true, true], // a narrow window forces the column in place
+    ['chats', true, true, false, false], // the column is folded to a strip
+    ['chats', true, true, true, true], // narrow overrides the remembered fold: the column is in place
+    ['chats', false, false, false, false], // a space shows its channels instead
+    ['chats', false, false, true, false], // narrow, but the list is not rendered at all
+    ['chats', false, true, false, false],
+    ['proxy', true, false, false, false], // another section: no chat list on screen
+    ['wallet', true, true, false, false],
+    ['settings', true, false, true, false],
   ];
-  for (const [view, showAside, hidden, want] of cases) {
-    assert.equal(personalCardOnScreen(view, showAside, hidden), want, `${view} ${showAside} ${hidden}`);
+  for (const [view, showAside, hidden, off, want] of cases) {
+    assert.equal(personalCardOnScreen(view, showAside, hidden, off), want, `${view} ${showAside} ${hidden} ${off}`);
   }
 });
 
