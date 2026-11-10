@@ -22,7 +22,7 @@
   import Skeleton from '../components/ui/Skeleton.svelte';
   import SelfCard from '../features/chat/SelfCard.svelte';
   import { chatsAction, view } from '../stores/nav.js';
-  import { panelHidden, togglePanel } from '../stores/panels.js';
+  import { panelHidden, togglePanel, setSelfCard, personalCardOnScreen } from '../stores/panels.js';
   import PanelHost from '../features/chat/PanelHost.svelte';
   import IconButton from '../components/ui/IconButton.svelte';
 
@@ -106,6 +106,9 @@
   // a space shows its own column of channels instead of this list (its header switches chats)
   $: isSpace = !!active && active.kind === 'group';
   $: showAside = narrow ? !opened : !isSpace;
+  // this column carries the "you" card at its foot, so the rail leaves its own card away while it is
+  // on screen (folded to a strip, it is not; a narrow window forces it in place)
+  $: setSelfCard('personal', personalCardOnScreen($view, showAside, $listHidden, narrow));
 
   // the chat beside a call opens and closes; the choice is remembered, and without one the chat is open
   // only when the window is wide enough to leave the picture its width
@@ -352,9 +355,9 @@
   {#if !narrow || opened}
   <section>
     {#if showSaved}
-      <Saved back={narrow} panelButton={!narrow ? 'personal' : ''} on:back={() => activeId.set('')} />
+      <Saved back={narrow} on:back={() => activeId.set('')} />
     {:else if active}
-      <Conversation conv={active} back={narrow} panelButton={!narrow && !isSpace ? 'personal' : ''} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')} let:compact let:toggleChannels>
+      <Conversation conv={active} back={narrow} stage={showCall} chatOpen={chatOpen} theatre={maximized} on:back={() => activeId.set('')} let:compact let:toggleChannels>
         {#if showCall}<CallStage title={stageTitle(active)} bind:maximized {chatOpen} unread={missed} channelsButton={compact && isSpace} on:channels={toggleChannels} on:togglechat={toggleCallChat} />{/if}
       </Conversation>
     {:else}

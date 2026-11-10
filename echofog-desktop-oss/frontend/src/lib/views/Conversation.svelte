@@ -7,6 +7,8 @@
   import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel, mainChannel } from '../stores/chats.js';
   import { isCallActive, startCall, endCall, peerInfo } from '../stores/call.store.js';
   import { ask } from '../stores/dialog.js';
+  import { view } from '../stores/nav.js';
+  import { panelHidden, setSelfCard, spaceCardOnScreen } from '../stores/panels.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
   import { savedError } from '../stores/saved.js';
   import { nameOf } from '../stores/people.js';
@@ -35,8 +37,6 @@
   export let conv;
   /** back: show a back arrow (narrow window, the list is hidden) */
   export let back = false;
-  /** which side column the head's button hides: 'personal' for a one-to-one chat in the list ('' none) */
-  export let panelButton = '';
   /** stage: a call's stage is in the default slot, between the channels and the chat; chatOpen: the chat
    *  beside it is shown; theatre: the stage takes everything (no channels, no chat) */
   export let stage = false;
@@ -104,6 +104,9 @@
     closeSearch();
   }
   onDestroy(() => keepDraft(draftKey(), { text, replyTo, editing }));
+  // the chat is gone (the saved list, back, another chat): its column is gone too, and the rail takes
+  // its own card back
+  onDestroy(() => setSelfCard('space', false));
   $: loadTransfers(conv.kind === 'direct' ? conv.peerId : '');
 
   // ---- composing ---------------------------------------------------------------------------------
@@ -223,6 +226,10 @@
   $: sheet = stage && screenW > 0 && screenW < 1000;
   $: if (!compact) chansOpen = false;
   $: $activeChannel, conv.id, (chansOpen = false);
+  // a space's column of channels carries the "you" card too, so the rail leaves its card away while
+  // that column is on screen: over the chat when the area is narrow, else once its strip is pinned open
+  $: spaceHidden = panelHidden.space;
+  $: setSelfCard('space', spaceCardOnScreen($view, conv.kind, (!compact || chansOpen) && !(stage && theatre) && (compact || !$spaceHidden)));
   // slow mode: how long until my next message here may go (who moderates is not held back); the
   // core holds it back too, this only shows it
   let now = Date.now();
@@ -312,7 +319,7 @@
   {/if}
   {#if stage}<div class="stage-slot"><slot {compact} toggleChannels={() => (chansOpen = !chansOpen)} /></div>{/if}
   <div class="main">
-    <ChatHeader {conv} {back} panelButton={conv.kind === 'group' ? 'space' : panelButton} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}
