@@ -22,8 +22,23 @@ import (
 var (
 	v2LiveLab = flag.Bool("live-lab", false, "v2-censor: add the real v2 carriers (servers on x1, clients on b1), a visit and a long session of each, and the v1 product for comparison")
 	v2LongFor = flag.Duration("long-for", 150*time.Second, "v2-censor -live-lab: length of the long session (the heavy-flow detector looks at flows longer than 2 minutes)")
+	v2Only    = flag.String("live-only", "", "v2-censor -live-lab: run only this carrier (noise3, reality2-tcp, reality2-quic, ws2); the v1 product stays out of the run")
 	v2Visits  = flag.Int("visits", 8, "v2-censor -live-lab: short sessions of each carrier")
 )
+
+// activeCarriers is the carriers of this run: all four, or the one of -live-only.
+func activeCarriers() []liveCarrier {
+	if *v2Only == "" {
+		return liveCarriers
+	}
+	var out []liveCarrier
+	for _, c := range liveCarriers {
+		if c.suite == *v2Only {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 const pauseBetween = 12 * time.Second
 
@@ -55,7 +70,7 @@ func liveReady(port uint16) string { return fmt.Sprintf("/tmp/v2carrier-%d.ready
 // of the v1 product at once. The servers belong to the caller, which kills them at the end.
 func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierInfo, labels map[uint16]harnessLabel) error {
 	s := strconv.FormatInt(seed, 10)
-	for _, c := range liveCarriers {
+	for _, c := range activeCarriers() {
 		labels[c.port] = harnessLabel{Suite: c.suite, Label: censor.LabelCarrier}
 		_, _ = run("docker", "exec", container("x1"), "rm", "-f", liveReady(c.port))
 		args := []string{"exec", "-d", container("x1"), "/tmp/v2carrier", "-mode", "real-serve", "-suite", c.suite,
@@ -71,7 +86,7 @@ func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierIn
 			return fmt.Errorf("start the %s server: %v %s", c.suite, err, out)
 		}
 	}
-	for _, c := range liveCarriers {
+	for _, c := range activeCarriers() {
 		ready := liveReady(c.port)
 		if !waitFor("the "+c.suite+" server", 30*time.Second, func() bool {
 			_, err := run("docker", "exec", container("x1"), "sh", "-c", "test -f "+ready)
@@ -109,7 +124,7 @@ func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierIn
 	// visits: one carrier after the other, so the sessions of one carrier are not mixed with another;
 	// a pause before each keeps the connection count of D8 (a 10-second window per client and
 	// address) from adding two blocks, or a block and a control, into one storm
-	for _, c := range liveCarriers {
+	for _, c := range activeCarriers() {
 		time.Sleep(pauseBetween)
 		out, err := client(c, max(1, *v2Visits), 0)
 		if err != nil {
@@ -125,7 +140,7 @@ func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierIn
 	logf("long sessions of %s: the four carriers and the v1 product at once", *v2LongFor)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	for _, c := range liveCarriers {
+	for _, c := range activeCarriers() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -140,11 +155,13 @@ func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierIn
 			count(c, out, "long")
 		}()
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		productLong(nodes, *v2LongFor)
-	}()
+	if *v2Only == "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			productLong(nodes, *v2LongFor)
+		}()
+	}
 	wg.Wait()
 	return nil
 }
@@ -195,18 +212,20 @@ func byGroup(labeled []censor.LabeledFlow, cfg censor.DetectorConfig) map[string
 		label censor.Label
 		suite string
 	}{}
-	for _, c := range liveCarriers {
+	for _, c := range activeCarriers() {
 		groups = append(groups, struct {
 			name  string
 			label censor.Label
 			suite string
 		}{c.suite, censor.LabelCarrier, c.suite})
 	}
-	groups = append(groups, struct {
-		name  string
-		label censor.Label
-		suite string
-	}{"v1-product", censor.LabelProduct, "v1-product"})
+	if *v2Only == "" {
+		groups = append(groups, struct {
+			name  string
+			label censor.Label
+			suite string
+		}{"v1-product", censor.LabelProduct, "v1-product"})
+	}
 
 	for _, g := range groups {
 		for _, kind := range []string{"visit", "long"} {
