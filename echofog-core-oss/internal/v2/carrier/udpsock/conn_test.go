@@ -25,6 +25,12 @@ const totalDatagrams = 10000
 // receive buffer can drop, so a lost datagram is a failure and not a race with the sender.
 const recvWindow = 1024
 
+// testRecvBuffer is what the loopback pair asks of SO_RCVBUF. The kernel doubles the request and
+// caps it at net.core.rmem_max, which is 208 KiB on a stock Ubuntu runner: asking 104 KiB leaves
+// exactly the 208 KiB ceiling CI has, so a local run sees the runner's buffer instead of a 4 MiB
+// one. The old 1024-datagram window does not fit it: 208 KiB holds 92 datagrams of 1400 bytes.
+const testRecvBuffer = 104 << 10
+
 // maxWriteBatch is the longest train the test asks for; the kernel accepts 64 segments.
 const maxWriteBatch = 32
 
@@ -304,7 +310,7 @@ func runDatagrams(t *testing.T, opt Options, batched bool) {
 	t.Helper()
 	recv := listen(t, opt)
 	send := listen(t, opt)
-	if err := recv.SetReadBuffer(8 << 20); err != nil {
+	if err := recv.SetReadBuffer(testRecvBuffer); err != nil {
 		t.Fatalf("receive buffer: %v", err)
 	}
 	dst := addrOf(t, recv)
