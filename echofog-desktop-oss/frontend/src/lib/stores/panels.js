@@ -32,3 +32,8 @@ export function togglePanel(kind) {
 }
 
 export const isPanelHidden = (kind) => get(panelHidden[kind]);
+
+export const selfCardShown = writable(false);
+
+// TODO: the rule, not its placeholder
+export const selfCardOnScreen = () => false;
