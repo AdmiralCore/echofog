@@ -251,9 +251,9 @@ func TestHeldAfterTheTunnelIsLostAndStop(t *testing.T) {
 	}
 	w.tn.Kill(errors.New("helper killed"))
 	eventually(t, func() bool { return w.a.WholeComputerStatus().State == tun.StateHeld })
-	if st := w.a.WholeComputerStatus(); st.Err == "" {
-		t.Error("held without a reason")
-	}
+	// The switch reports the loss the moment the helper dies; the reason comes from the app's own
+	// path, so the two are read a beat apart and the test waits for both.
+	eventually(t, func() bool { return w.a.WholeComputerStatus().Err != "" }, "held without a reason")
 	if len(w.kernel.Rules()) == 0 {
 		t.Fatal("the filters left with the helper")
 	}
@@ -322,12 +322,12 @@ func TestWithoutPrivilegeTheModeStaysOff(t *testing.T) {
 	}
 }
 
-func eventually(t *testing.T, f func() bool) {
+func eventually(t *testing.T, f func() bool, msgAndArgs ...any) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for !f() {
 		if time.Now().After(deadline) {
-			t.Fatal("condition not reached")
+			t.Fatal(append([]any{"condition not reached"}, msgAndArgs...)...)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
