@@ -96,14 +96,16 @@ func liveHarness(nodes map[string]*node, v *verdict, seed int64, info *carrierIn
 		}
 	}
 	// the CDN certificate of ws2 goes to the client, as a card would carry the pin
-	tmp := filepath.Join(os.TempDir(), "ws2-cdn.pem")
-	if out, err := run("docker", "cp", container("x1")+":/tmp/ws2-cdn.pem", tmp); err != nil {
-		return fmt.Errorf("copy the CDN certificate out of x1: %v %s", err, out)
+	if *v2Only == "" || *v2Only == "ws2" {
+		tmp := filepath.Join(os.TempDir(), "ws2-cdn.pem")
+		if out, err := run("docker", "cp", container("x1")+":/tmp/ws2-cdn.pem", tmp); err != nil {
+			return fmt.Errorf("copy the CDN certificate out of x1: %v %s", err, out)
+		}
+		if out, err := run("docker", "cp", tmp, container("b1")+":"+liveCAFile); err != nil {
+			return fmt.Errorf("copy the CDN certificate to b1: %v %s", err, out)
+		}
+		_ = os.Remove(tmp)
 	}
-	if out, err := run("docker", "cp", tmp, container("b1")+":"+liveCAFile); err != nil {
-		return fmt.Errorf("copy the CDN certificate to b1: %v %s", err, out)
-	}
-	_ = os.Remove(tmp)
 
 	client := func(c liveCarrier, sessions int, d time.Duration) (string, error) {
 		return run("docker", "exec", container("b1"), "/tmp/v2carrier", "-mode", "real-client", "-suite", c.suite,
