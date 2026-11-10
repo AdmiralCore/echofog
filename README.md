@@ -8,7 +8,8 @@ server in the middle that anyone can switch off. Messages and calls are end-to-e
 network is filtered, the connection is disguised as an ordinary visit to an ordinary website.
 
 A VPN is built in as a second feature: go online through an exit that a friend or an operator runs, or
-share your own.
+share your own. Exits are how node operators earn in later releases. In 0.3.0 they are free and shared
+by link; paid v2 exits come later.
 
 > **Status: 0.3.0, the first release on protocol v2. Experimental.** It works end to end in our lab and
 > test networks, but it has **not** had an independent security audit, and it has **not** been tested
