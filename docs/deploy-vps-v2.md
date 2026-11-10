@@ -230,6 +230,35 @@ and `ECHOFOG_NOISE_PORT` (UDP) only, so with a cover and invitations the listene
 reachable until the override publishes it. Without a cover, invitations use 444, which the base file
 already publishes.
 
+### Before publishing: check the cover
+
+Run the preflight before the first start, with the name and the address but no profile yet:
+
+```sh
+echofog-node v2 doctor --cover node.example.org:443 --advertise 203.0.113.10
+```
+
+After the profile exists, the bare flag takes the cover and the site folder from `server.json`:
+
+```sh
+$DC exec node echofog-node v2 doctor --data /data --cover
+```
+
+The check sends DNS, one TCP probe, one TLS handshake and one GET, all to the cover's own name and
+address, and prints one line per rule with the reason and the fix. The A/AAAA record (a CNAME is
+followed) must lead to `ECHOFOG_ADVERTISE_ADDR`. TCP 443 must answer. The handshake must be TLS 1.3
+with `h2` in ALPN, and the certificate must chain to the system roots, name the cover and not be
+self-signed; fewer than 14 days left is a warning. `GET https://<cover>/` must answer 200 with HTML,
+`index.html` must be in the site folder, and the folder must be mounted into the container. Exit
+code 0 means no errors (warnings are allowed), 1 means at least one error.
+
+A free name works the same way. DuckDNS gives `name.duckdns.org`: point it at the server's address,
+wait for the record, then check:
+
+```sh
+echofog-node v2 doctor --cover name.duckdns.org:443 --advertise 203.0.113.10
+```
+
 ## 6. Firewall and the provider's panel
 
 Allow SSH first, or you will lock yourself out. Check the SSH port your provider uses before running
@@ -408,6 +437,7 @@ cd ../.. && rm -rf echofog
 | `pull` is denied | The registry wants an authenticated request, or the tag is wrong | `docker login ghcr.io` with a `read:packages` token, or check the tag |
 | No public card, while a cover is set | DNS does not point at the server, the site folder is empty or foreign, or the ACME order failed | `$DC exec node echofog-node v2 doctor --data /data --dns`, open TCP 443 (and 80 for `http-01`), check the site has `index.html` |
 | No public card, no cover | That is the design | Add a domain and a site folder, or keep the node for its own people |
+| `doctor --cover` reports a DNS mismatch, a closed port or a bad certificate | A tester would not get the cover: the name, the port or the certificate is not ready | Fix the line the check names; section 5 describes the preflight |
 | Peers do not connect, `status` shows no sessions | UDP 443 is closed in `ufw` or in the provider's panel, or `ECHOFOG_ADVERTISE_ADDR` is not the address the Internet sees | Open 443/udp in both places; compare the address with the provider's console |
 | Invitations are refused | `ECHOFOG_INVITES` was `false` at the first start | Edit `server.json` and add the invite listener (section 5), or, on a node not yet in use, start over with an empty volume; then publish the port |
 | Clock warnings in `status` or `doctor` | Time is not synchronised | `timedatectl set-ntp true` |
