@@ -114,7 +114,9 @@ jobs:
   fuzz:
     name: Fuzz smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # About a hundred targets at 10 s each plus a build apiece is some 17 minutes: the old 15 cut
+    # the run off inside internal/v2/mux, so every later package was never fuzzed at all.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: echofog-core-oss
