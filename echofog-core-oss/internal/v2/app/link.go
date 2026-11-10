@@ -85,11 +85,17 @@ func (a *App) open(text string) (info LinkInfo, link string, node, device [32]by
 	pv, err := a.cfg.Links.Open(link)
 	if err != nil {
 		// A link copied from a terminal can be wrapped across lines: the first token is then only
-		// its beginning. links.Open is the place that joins it back, and it only touches a text
-		// that begins with a join link.
+		// its beginning, and links.Open is the place that joins it back, touching a text only when
+		// it begins with a join link. That second pass over the whole pasted text is the one that
+		// reads a wrapped link, so its refusal (expired, damaged, another version, revoked) is the
+		// answer; a text that merely has a link inside it keeps the refusal of the first token.
 		if raw := strings.TrimSpace(text); raw != link {
-			if pv2, err2 := a.cfg.Links.Open(raw); err2 == nil {
+			pv2, err2 := a.cfg.Links.Open(raw)
+			switch {
+			case err2 == nil:
 				pv, link, err = pv2, raw, nil
+			case links.IsJoinForm(raw):
+				err = err2
 			}
 		}
 	}

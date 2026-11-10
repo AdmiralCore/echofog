@@ -206,15 +206,19 @@ func Open(link string, now time.Time) (*Preview, error) {
 }
 
 // maxWrappedLink bounds the text joinWrapped takes: a terminal can put a break after every
-// character, so a valid link comes back at most twice its own length.
+// character, so a link wrapped with a one-byte break (LF, or CR alone) comes back at most twice its
+// own length; a CRLF break would give three times. A real link is far shorter than this bound (an
+// invitation is about 1.4 KiB), and a longer text is left as it is.
 const maxWrappedLink = 2 * (16 << 10)
 
 // linkSpace is the white space a terminal inserts when it wraps a long line.
 var linkSpace = strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "")
 
-// isJoinForm reports whether s begins with a link that may carry the line breaks of a terminal:
-// the echofog:// forms or the https join page.
-func isJoinForm(s string) bool {
+// IsJoinForm reports whether s begins with a link that may carry the line breaks of a terminal:
+// the echofog:// forms or the https join page. The slash web form of the page (…/join/#join/?…)
+// is not one of them: only the three forms above are joined, so with the breaks of a terminal it
+// does not open.
+func IsJoinForm(s string) bool {
 	return strings.HasPrefix(s, "echofog://join?") ||
 		strings.HasPrefix(s, "echofog://join/?") ||
 		(strings.HasPrefix(s, "https://") && strings.Contains(s, "/join/#join?"))
@@ -224,7 +228,7 @@ func isJoinForm(s string) bool {
 // terminal comes with line breaks or spaces inside it. Only a text that begins with a join link is
 // touched; other text is left as it is. ParseLink still bounds the result.
 func joinWrapped(s string) string {
-	if len(s) > maxWrappedLink || !isJoinForm(s) {
+	if len(s) > maxWrappedLink || !IsJoinForm(s) {
 		return s
 	}
 	return linkSpace.Replace(s)

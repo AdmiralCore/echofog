@@ -19,15 +19,16 @@ export const WEB_LINK_BASE = 'https://admiralcore.github.io/echofog/join/#';
 export const MAX_LINK = 16 * 1024;
 
 // an EchoFog link somewhere in a text (a messenger adds words around it, or a dot after it)
-const FIND = /(https?:\/\/[^\s#]+#\S+|echofog:\/\/\S+|fogcontact1:\S+|fogroup[12]:\S+)/i;
+const FIND = /(https:\/\/[^\s#]+#\S+|echofog:\/\/\S+|fogcontact1:\S+|fogroup[12]:\S+)/i;
 
 // A terminal wraps a long line, so a link copied from it carries the breaks inside: the text then
 // begins with the whole link, which is joined back before it is looked for.
-const JOIN_START = /^(?:echofog:\/\/join\/?\?|https?:\/\/[^\s#]+\/join\/#join\/?\?)/i;
+const JOIN_START = /^(?:echofog:\/\/join\/?\?|https:\/\/[^\s#]+\/join\/#join\/?\?)/i;
 const WHITESPACE = /[ \t\r\n]+/g;
 
 function joinWrapped(text) {
-  // a break after every character doubles the text at most: anything longer cannot be one link
+  // a break after every character doubles the text at most (with CRLF it is three times; a real
+  // link is far shorter than this bound): anything longer cannot be one link
   if (text.length > 2 * MAX_LINK || !JOIN_START.test(text)) return text;
   return text.replace(WHITESPACE, '');
 }
@@ -43,7 +44,7 @@ export function fromWebLink(text) {
   const found = FIND.exec(raw);
   if (!found) return text;
   let t = found[1].replace(/[.,;:!?)\]»"'”’>]+$/, '');
-  const web = /^https?:\/\/[^#\s]+#(.+)$/i.exec(t);
+  const web = /^https:\/\/[^#\s]+#(.+)$/i.exec(t);
   if (web) {
     let frag = web[1];
     if (/^(echofog|fogroup[12]|fogcontact1)%3A/i.test(frag)) {
