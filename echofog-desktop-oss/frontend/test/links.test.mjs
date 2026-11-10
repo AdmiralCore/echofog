@@ -54,6 +54,18 @@ test('a link copied from a terminal with line breaks is the same link', () => {
   assert.equal(fromWebLink('hello world'), 'hello world');
 });
 
+test('only the https page form is a join link', () => {
+  const web = `https://join.example.org/join/#join?v=2&card=${CARD}&s=XYZ`;
+  const http = web.replace('https://', 'http://');
+  // the core takes the https page only: http:// is other text to the app too
+  assert.equal(classifyLink(http), null);
+  assert.equal(fromWebLink(http), http);
+  const brk = (s, n) => s.replace(new RegExp(`(.{${n}})`, 'g'), '$1\n');
+  assert.equal(fromWebLink(brk(http, 70)), brk(http, 70));
+  // the https form still is a join link, also after the breaks are taken out
+  assert.equal(classifyLink(brk(web, 70))?.kind, 'join');
+});
+
 test('a v1 join link is version 1', () => {
   assert.deepEqual(joinInfo('echofog://join?id=' + 'a'.repeat(64) + '&addr=1.2.3.4:5'), { version: 1, hasSecret: false });
   assert.deepEqual(joinInfo('echofog://join?id=' + 'a'.repeat(64) + '&token=abc'), { version: 1, hasSecret: true });
