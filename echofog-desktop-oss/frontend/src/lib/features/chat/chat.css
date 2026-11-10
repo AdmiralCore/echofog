@@ -285,6 +285,7 @@
 .chat-screen .chan.unread .pv { color: var(--text); }
 .chat-screen .chan .ro-ic { display: inline-flex; color: var(--faint); }
 .chat-screen .chan .badge { min-width: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--accent); color: var(--accent-ink); font-size: var(--fs-2xs); font-weight: var(--fw-bold); line-height: 20px; text-align: center; }
+.chat-screen .chan .badge.mention { margin-right: 4px; background: var(--danger); color: var(--danger-ink); }
 .chat-screen .chan.room.here { background: var(--ok-soft); }
 .chat-screen .chan-row .gear { position: absolute; right: 4px; opacity: 0; width: 24px; height: 24px; }
 .chat-screen .chan-row:hover .gear, .chat-screen .chan-row .gear:focus-visible { opacity: 1; }

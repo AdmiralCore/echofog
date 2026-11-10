@@ -6,6 +6,7 @@
   import { errorScreen, screenKeys } from '../errscreen.js';
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
+  import Button from './ui/Button.svelte';
 
   $: keys = $errorScreen ? screenKeys($errorScreen.code) : null;
   const close = () => errorScreen.set(null);
@@ -13,23 +14,32 @@
 
 {#if $errorScreen}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="backdrop" transition:fade={{ duration: 140 }} on:click|self={close}>
-    <div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="es-title" aria-describedby="es-text" transition:scale={{ start: 0.95, duration: 180 }}>
-      <span class="ico"><Icon name="info" size={22} /></span>
-      <h3 id="es-title">{keys ? $t(keys.title) : $errorScreen.title}</h3>
-      <p id="es-text">{keys ? $t(keys.text) : $errorScreen.text}</p>
-      <button class="primary" on:click={close}>{$t('errscreen.close')}</button>
+  <div class="backdrop" transition:fade={{ duration: 140 }} on:click|self={close} on:keydown={(e) => e.key === 'Escape' && close()}>
+    <div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="es-title" aria-describedby="es-text" transition:scale={{ start: 0.97, duration: 160 }}>
+      <div class="head">
+        <span class="ico"><Icon name="info" size={18} /></span>
+        <div class="text">
+          <h3 id="es-title">{keys ? $t(keys.title) : $errorScreen.title}</h3>
+          <p id="es-text">{keys ? $t(keys.text) : $errorScreen.text}</p>
+        </div>
+      </div>
+      <div class="actions">
+        <Button variant="primary" on:click={close}>{$t('errscreen.close')}</Button>
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .backdrop { position: fixed; inset: 0; z-index: 10002; display: grid; place-items: center; padding: 16px; background: var(--scrim); backdrop-filter: blur(6px); }
+  .backdrop { position: fixed; inset: 0; z-index: var(--z-dialog); display: grid; place-items: center; padding: 16px; background: var(--scrim); }
   .dlg {
-    width: min(420px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 22px 20px; text-align: center;
-    border-radius: 20px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+    width: min(440px, 100%); padding: 22px; border-radius: var(--r-xl); display: flex; flex-direction: column; gap: 18px;
+    background: var(--surface-1); border: 1px solid var(--border-strong); box-shadow: var(--shadow-xl);
   }
-  .ico { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-  h3 { margin: 4px 0 0; font-size: 17px; }
-  p { margin: 0 0 8px; color: var(--muted, inherit); line-height: 1.5; }
+  .head { display: flex; gap: 14px; align-items: flex-start; }
+  .ico { width: 36px; height: 36px; flex: none; border-radius: var(--r-lg); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-fg); }
+  .text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  h3 { margin: 0; font-size: var(--fs-lg); line-height: var(--lh-lg); }
+  p { margin: 0; font-size: var(--fs-md); line-height: var(--lh-md); color: var(--text); word-break: break-word; }
+  .actions { display: flex; justify-content: flex-end; }
 </style>

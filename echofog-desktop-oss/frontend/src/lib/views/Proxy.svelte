@@ -363,7 +363,7 @@
       <div class="banner warn" role="alert">
         <Icon name="lock" size={16} />
         <span class="grow small">{$t(vpn.blocked ? 'proxy.killBlocked' : 'proxy.killHeld')}</span>
-        <Button size="sm" variant="primary" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</Button>
+        <Button variant="primary" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</Button>
       </div>
     {/if}
 

@@ -25,6 +25,10 @@
     ? [...new Set([$me.id, ...($callState.members?.length ? $callState.members : ch.call?.members || [])])]
     : ch.call?.members || [];
   $: people = members.length;
+  // the last message of a text channel (T11.3e): who wrote it and the start of it, so a column says what is new
+  $: lastLine = ch.last && !ch.voice
+    ? (ch.last.author && !ch.last.mine ? $nameOf(ch.last.author) + ': ' : '') + (ch.last.deleted ? $t('chats.deletedMsg') : ch.last.text || (ch.last.file ? ch.last.file.name : ''))
+    : '';
 
   // a text channel opens its feed and folds a live call of this space into the small window;
   // the room of that call (its row or its people) brings the stage back
@@ -50,8 +54,8 @@
   {:else}
     <button class="chan" class:on={$activeChannel === ch.id} class:unread={ch.unread > 0} title={ch.topic || ch.name} on:click={openText}>
       <span class="ci"><Icon name="hash" size={16} /></span>
-      <span class="cb"><span class="nm">{ch.name}</span>{#if ch.topic}<span class="pv">{ch.topic}</span>{/if}</span>
-      {#if ch.unread > 0 && $activeChannel !== ch.id}<span class="badge">{ch.unread}</span>
+      <span class="cb"><span class="nm">{ch.name}</span>{#if lastLine}<span class="pv">{lastLine}</span>{:else if ch.topic}<span class="pv">{ch.topic}</span>{/if}</span>
+      {#if ch.unread > 0 && $activeChannel !== ch.id}{#if ch.mentions > 0}<span class="badge mention" title={$t('chats.mentionsTitle', { n: ch.mentions })}>@</span>{/if}<span class="badge">{ch.unread}</span>
       {:else if ch.readOnly}<span class="ro-ic" title={$t('chats.readOnlyChannel')}><Icon name="lock" size={12} /></span>
       {:else if ch.slowSecs}<span class="ro-ic" title={$t('chats.slowOn', { s: ch.slowSecs })}><Icon name="clock" size={12} /></span>{/if}
     </button>
