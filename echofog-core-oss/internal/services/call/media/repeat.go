@@ -19,11 +19,13 @@ import (
 // repeatTTL drops the unit a source left behind once it went quiet.
 const repeatTTL = time.Second
 
+// repeatKey is a (peer, source) pair: the unit a source sent last to that peer.
 type repeatKey struct {
 	to  types.PeerID
 	src sourceKey
 }
 
+// repeatUnit is the fragments of the last unit sent, and when.
 type repeatUnit struct {
 	frags [][]byte
 	at    time.Time
@@ -56,6 +58,7 @@ func (d *MediaDispatcher) sendAudio(to types.PeerID, src sourceKey, t transport.
 	}
 }
 
+// gc forgets the sources that went quiet.
 func (r *audioRepeat) gc(now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

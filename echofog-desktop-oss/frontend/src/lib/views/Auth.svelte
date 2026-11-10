@@ -7,6 +7,13 @@
   import { resolvedTheme, toggleTheme } from '../stores/theme.js';
   import Icon from '../components/ui/Icon.svelte';
   import Avatar from '../components/ui/Avatar.svelte';
+  import Button from '../components/ui/Button.svelte';
+  import IconButton from '../components/ui/IconButton.svelte';
+  import Input from '../components/ui/Input.svelte';
+  import Textarea from '../components/ui/Textarea.svelte';
+  import Tabs from '../components/ui/Tabs.svelte';
+  import Checkbox from '../components/ui/Checkbox.svelte';
+  import Badge from '../components/ui/Badge.svelte';
   import { t, lang, locale, LANGUAGES } from '../i18n/index.js';
 
   let password = '';
@@ -83,6 +90,20 @@
 
   const go = (s) => { reset(); screen.set(s); };
 
+  // the create / restore switch is a Tabs control: it follows the screen and changes it
+  let tab = 'create';
+  $: if ($screen === 'create' || $screen === 'restore') tab = $screen;
+  const onTab = (e) => go(e.detail);
+
+  // focus the first text field of a step when it appears
+  function focusFirst(node) {
+    const id = setTimeout(() => node.querySelector('input:not([type=checkbox]), textarea')?.focus(), 30);
+    return { destroy: () => clearTimeout(id) };
+  }
+
+  $: strength = password.length >= 12 ? 'good' : password.length >= 8 ? 'ok' : password.length ? 'weak' : '';
+  $: phraseWords = phrase.trim().split(/\s+/).filter(Boolean).length;
+
   function submitCreate() {
     if (password.length < 8) return (error = $t('auth.tooShort'));
     if (password !== confirm) return (error = $t('auth.mismatch'));
@@ -118,66 +139,65 @@
 </script>
 
 <div class="wrap">
-  <div class="orb o1" aria-hidden="true"></div>
-  <div class="orb o2" aria-hidden="true"></div>
-  <div class="orb o3" aria-hidden="true"></div>
-
-  <div class="langs" role="group" aria-label={$t('auth.language')}>
+  <div class="top left" role="group" aria-label={$t('auth.language')}>
     {#each LANGUAGES as l}
-      <button class:on={$lang === l.id} aria-pressed={$lang === l.id} title={l.label} on:click={() => locale.set(l.id)}>{l.id.toUpperCase()}</button>
+      <button class="lang" class:on={$lang === l.id} aria-pressed={$lang === l.id} title={l.label} on:click={() => locale.set(l.id)}>{l.id.toUpperCase()}</button>
     {/each}
   </div>
 
-  <button class="icon theme" title={$resolvedTheme === 'dark' ? $t('auth.lightTheme') : $t('auth.darkTheme')} aria-label={$t('auth.toggleTheme')} on:click={toggleTheme}>
-    <Icon name={$resolvedTheme === 'dark' ? 'sun' : 'moon'} size={18} />
-  </button>
+  <div class="top right">
+    <IconButton icon={$resolvedTheme === 'dark' ? 'sun' : 'moon'} label={$resolvedTheme === 'dark' ? $t('auth.lightTheme') : $t('auth.darkTheme')} on:click={toggleTheme} />
+  </div>
 
-  <div class="box stack">
-    <div class="hero">
-      <span class="mark" aria-hidden="true"><span></span></span>
+  <main class="box">
+    <header class="hero">
+      <span class="mark" aria-hidden="true"><Icon name="signal" size={20} stroke={2} /></span>
       <div>
         <h1>EchoFog</h1>
-        <p class="muted small">{$t('auth.tagline')}</p>
+        <p class="muted">{$t('auth.tagline')}</p>
       </div>
-    </div>
+    </header>
 
     {#if held}
-      <div class="killed" role="alert">
-        <span class="small">{$t('proxy.killHeld')}</span>
-        <button class="killbtn" on:click={unblock}>{$t('proxy.killUnblock')}</button>
+      <div class="notice warn held" role="alert">
+        <Icon name="warning" size={16} />
+        <span class="grow">{$t('proxy.killHeld')}</span>
+        <div class="held-btn"><Button size="sm" on:click={unblock}>{$t('proxy.killUnblock')}</Button></div>
       </div>
     {/if}
 
     {#key $screen}
-    <div class="step stack">
+    <div class="step" use:focusFirst>
     {#if $screen === 'profiles'}
       <h2>{$t('auth.chooseProfile')}</h2>
-      <div class="profiles">
+      <ul class="profiles">
         {#each $profiles as name}
-          <div class="prof">
-            <button class="pick" on:click={() => run(() => choose(name))} disabled={busy}>
-              <Avatar id={name} {name} size={36} />
-              <span class="grow">{name}</span>
-              <Icon name="chevronRight" size={16} />
-            </button>
-            <button class="icon del" title={$t('auth.deleteProfile')} aria-label={$t('auth.deleteProfileNamed', { name })} aria-expanded={delName === name} on:click={() => askDelete(name)} disabled={busy}><Icon name="trash" size={16} /></button>
-          </div>
-          {#if delName === name}
-            <form class="del-confirm stack" on:submit|preventDefault={confirmDelete}>
-              <p class="small muted">{$t('auth.confirmDelete', { name })}</p>
-              <p class="small muted">{$t('auth.deletePasswordHint')}</p>
-              <label>{$t('auth.password')}<input type="password" bind:value={delPassword} autocomplete="off" /></label>
-              <div class="row">
-                <button type="button" class="ghost grow" on:click={cancelDelete} disabled={busy}>{$t('common.cancel')}</button>
-                <button type="submit" class="danger grow" disabled={busy || !delPassword}>{$t('auth.delete')}</button>
-              </div>
-            </form>
-          {/if}
+          <li>
+            <div class="prof">
+              <button class="pick" on:click={() => run(() => choose(name))} disabled={busy}>
+                <Avatar id={name} {name} size={32} />
+                <span class="grow nm">{name}</span>
+                <Icon name="chevronRight" size={16} />
+              </button>
+              <IconButton icon="trash" label={$t('auth.deleteProfileNamed', { name })} pressed={delName === name} disabled={busy} on:click={() => askDelete(name)} />
+            </div>
+            {#if delName === name}
+              <form class="del-confirm" on:submit|preventDefault={confirmDelete}>
+                <p class="small muted">{$t('auth.confirmDelete', { name })}</p>
+                <p class="small faint">{$t('auth.deletePasswordHint')}</p>
+                <Input type="password" label={$t('auth.password')} bind:value={delPassword} autocomplete="off" />
+                <div class="row">
+                  <Button className="grow" on:click={cancelDelete} disabled={busy}>{$t('common.cancel')}</Button>
+                  <Button className="grow" variant="danger-solid" type="submit" disabled={busy || !delPassword}>{$t('auth.delete')}</Button>
+                </div>
+              </form>
+            {/if}
+          </li>
         {/each}
-      </div>
-      <form class="row" on:submit|preventDefault={() => run(() => choose(newName))}>
-        <input class="grow" placeholder={$t('auth.newProfileName')} bind:value={newName} />
-        <button type="submit" class="primary" disabled={busy || !newName.trim()}>{$t('common.create')}</button>
+      </ul>
+      <form class="row add" on:submit|preventDefault={() => run(() => choose(newName))}>
+        <div class="grow"><Input placeholder={$t('auth.newProfileName')} aria-label={$t('auth.newProfileName')} bind:value={newName} /></div>
+        <Button variant="primary" type="submit" disabled={busy || !newName.trim()}>{$t('common.create')}</Button>
       </form>
 
     {:else if $screen === 'login'}
@@ -187,66 +207,65 @@
       </div>
       {#if $unlockNote}<p class="small warn" role="status">{$t('remember.reason.' + $unlockNote.reason, { error: $unlockNote.error })}</p>{/if}
       <form class="stack" on:submit|preventDefault={() => run(() => login(password, rememberMe))}>
-        <label>{$t('auth.password')}<input type="password" bind:value={password} autofocus /></label>
+        <Input type="password" label={$t('auth.password')} bind:value={password} />
         {#if rememberOffer}
-          <label class="row remember"><input type="checkbox" bind:checked={rememberMe} /> {$t('remember.loginCheckbox')}</label>
-          {#if rememberMe}<p class="small faint">{$t('remember.loginHint')}</p>{/if}
+          <Checkbox bind:checked={rememberMe} label={$t('remember.loginCheckbox')} hint={rememberMe ? $t('remember.loginHint') : ''} />
         {/if}
-        <button class="primary big" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner light"></span> {$t('auth.unlocking')}{:else}<Icon name="lockOpen" size={16} /> {$t('auth.unlock')}{/if}</button>
+        <Button variant="primary" size="lg" block type="submit" icon="lockOpen" loading={busy} disabled={!password}>{busy ? $t('auth.unlocking') : $t('auth.unlock')}</Button>
       </form>
       <div class="row links">
-        <button class="ghost small" on:click={() => go('profiles')}>{$t('auth.otherProfile')}</button>
+        <Button variant="ghost" size="sm" on:click={() => go('profiles')}>{$t('auth.otherProfile')}</Button>
         <span class="grow"></span>
-        <button class="ghost small" on:click={() => go('restore')}>{$t('auth.forgotPassword')}</button>
+        <Button variant="ghost" size="sm" on:click={() => go('restore')}>{$t('auth.forgotPassword')}</Button>
       </div>
 
     {:else if $screen === 'create' || $screen === 'restore'}
-      <div class="seg" role="tablist" aria-label={$t('auth.newOrExisting')}>
-        <button role="tab" class:active={$screen === 'create'} aria-selected={$screen === 'create'} on:click={() => go('create')}>{$t('auth.newIdentity')}</button>
-        <button role="tab" class:active={$screen === 'restore'} aria-selected={$screen === 'restore'} on:click={() => go('restore')}>{$t('auth.recoveryPhrase')}</button>
-      </div>
+      <Tabs variant="segment" label={$t('auth.newOrExisting')} bind:value={tab} on:change={onTab}
+        items={[{ id: 'create', label: $t('auth.newIdentity') }, { id: 'restore', label: $t('auth.recoveryPhrase') }]} />
     {/if}
 
     {#if $screen === 'create'}
-      <h2>{$t('auth.createTitle')}</h2>
-      <p class="muted small">
-        {$t('auth.createHint')}
-      </p>
+      <div>
+        <h2>{$t('auth.createTitle')}</h2>
+        <p class="muted small lead">{$t('auth.createHint')}</p>
+      </div>
       <form class="stack" on:submit|preventDefault={submitCreate}>
-        <label>{$t('auth.password')}<input type="password" bind:value={password} autofocus /></label>
-        <div class="meter" aria-hidden="true"><span style="width:{Math.min(100, password.length * 8)}%" class:good={password.length >= 12} class:ok={password.length >= 8 && password.length < 12}></span></div>
-        <label>{$t('auth.repeatPassword')}<input type="password" bind:value={confirm} /></label>
-        <button class="primary big" type="submit" disabled={busy}>{busy ? $t('auth.creating') : $t('common.create')}</button>
+        <Input type="password" label={$t('auth.password')} bind:value={password} />
+        <div class="meter {strength}" aria-hidden="true"><span></span><span></span><span></span></div>
+        <Input type="password" label={$t('auth.repeatPassword')} bind:value={confirm} />
+        <Button variant="primary" size="lg" block type="submit" loading={busy}>{busy ? $t('auth.creating') : $t('common.create')}</Button>
       </form>
-      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> {$t('common.back')}</button></div>{/if}
+      {#if $profiles.length}<div class="row"><Button variant="ghost" size="sm" icon="arrowLeft" on:click={() => go('profiles')}>{$t('common.back')}</Button></div>{/if}
 
     {:else if $screen === 'restore'}
-      <h2>{$t('auth.restoreTitle')}</h2>
-      <p class="muted small">{$t('auth.restoreHint')}</p>
+      <div>
+        <h2>{$t('auth.restoreTitle')}</h2>
+        <p class="muted small lead">{$t('auth.restoreHint')}</p>
+      </div>
       <form class="stack" on:submit|preventDefault={submitRestore}>
-        <label>{$t('auth.recoveryPhrase')}<textarea rows="3" bind:value={phrase} spellcheck="false" autocomplete="off" placeholder={$t('auth.phrasePlaceholder')} /></label>
-        {#if phraseCheck}<p class="small" class:error={phrase.trim().split(/\s+/).length >= 12} class:faint={phrase.trim().split(/\s+/).length < 12}>{phraseCheck}</p>
+        <Textarea rows={3} label={$t('auth.recoveryPhrase')} bind:value={phrase} spellcheck="false" autocomplete="off" placeholder={$t('auth.phrasePlaceholder')} />
+        {#if phraseCheck}<p class="small" class:error={phraseWords >= 12} class:faint={phraseWords < 12}>{phraseCheck}</p>
         {:else if phraseOk}<p class="small ok">{$t('auth.phraseValid')}</p>{/if}
         <details>
           <summary class="small muted">{$t('auth.hasPassphrase')}</summary>
-          <label class="pp">{$t('auth.extraPassphrase')}<input type="password" bind:value={passphrase} autocomplete="off" /></label>
+          <div class="pp"><Input type="password" label={$t('auth.extraPassphrase')} bind:value={passphrase} autocomplete="off" /></div>
         </details>
-        <label>{$t('auth.newPassword')}<input type="password" bind:value={password} /></label>
-        <label>{$t('auth.repeatPassword')}<input type="password" bind:value={confirm} /></label>
-        <button class="primary big" type="submit" disabled={busy}>{busy ? $t('auth.restoring') : $t('auth.restore')}</button>
+        <Input type="password" label={$t('auth.newPassword')} bind:value={password} />
+        <Input type="password" label={$t('auth.repeatPassword')} bind:value={confirm} />
+        <Button variant="primary" size="lg" block type="submit" loading={busy}>{busy ? $t('auth.restoring') : $t('auth.restore')}</Button>
       </form>
-      {#if $profiles.length}<div class="row"><button class="ghost small with-icon" on:click={() => go('profiles')}><Icon name="arrowLeft" size={15} /> {$t('common.back')}</button></div>{/if}
+      {#if $profiles.length}<div class="row"><Button variant="ghost" size="sm" icon="arrowLeft" on:click={() => go('profiles')}>{$t('common.back')}</Button></div>{/if}
 
     {:else if $screen === 'phrase'}
-      <h2>{$t('auth.phraseTitle')}</h2>
-      <p class="muted small">
-        {$t('auth.phraseHint')}
-      </p>
+      <div>
+        <h2>{$t('auth.phraseTitle')}</h2>
+        <p class="muted small lead">{$t('auth.phraseHint')}</p>
+      </div>
       <ol class="words">
-        {#each $recoveryPhrase.split(' ') as w, i}<li style="animation-delay:{i * 18}ms"><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}
+        {#each $recoveryPhrase.split(' ') as w, i}<li><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}
       </ol>
-      <label class="row"><input type="checkbox" bind:checked={saved} /> {$t('auth.phraseSaved')}</label>
-      <button class="primary big" disabled={!saved || busy} on:click={() => run(phraseSaved)}>{$t('auth.continue')}</button>
+      <Checkbox bind:checked={saved} label={$t('auth.phraseSaved')} />
+      <Button variant="primary" size="lg" block disabled={!saved} loading={busy} on:click={() => run(phraseSaved)}>{$t('auth.continue')}</Button>
 
     {:else if $screen === 'access'}
       <h2>{$t('auth.access.title')}</h2>
@@ -255,7 +274,7 @@
           <button class="mode" class:sel={accessMode === m} role="radio" aria-checked={accessMode === m} on:click={() => (accessMode = m)}>
             <span class="mode-ico"><Icon name={m === 'public' ? 'globe' : 'lock'} size={18} /></span>
             <span class="mode-text">
-              <b>{$t('auth.access.' + m + 'Title')}{#if m === 'public'} <span class="rec">{$t('auth.access.recommended')}</span>{/if}</b>
+              <b>{$t('auth.access.' + m + 'Title')}{#if m === 'public'} <Badge variant="accent" size="sm">{$t('auth.access.recommended')}</Badge>{/if}</b>
               <span class="small muted">{$t('auth.access.' + m + 'Text')}</span>
             </span>
             <span class="radio" aria-hidden="true"></span>
@@ -263,101 +282,80 @@
         {/each}
       </div>
       <p class="small faint">{$t('auth.access.hint')}</p>
-      <button class="primary big" disabled={busy} on:click={() => run(() => chooseAccess(accessMode))}>
-        {#if busy}<span class="spinner light"></span>{/if}{$t('auth.access.start')}
-      </button>
+      <Button variant="primary" size="lg" block loading={busy} on:click={() => run(() => chooseAccess(accessMode))}>{$t('auth.access.start')}</Button>
     {/if}
     </div>
     {/key}
 
-    {#if error}<p class="error small err">{error}</p>{/if}
-  </div>
+    {#if error}<p class="notice err" role="alert"><Icon name="error" size={16} /> <span>{error}</span></p>{/if}
+  </main>
 </div>
 
 <style>
   .wrap {
-    position: relative; height: 100%; display: grid; place-items: center; overflow-y: auto; overflow-x: hidden; padding: 24px 16px;
-    background: var(--bg);
+    position: relative; height: 100%; display: grid; place-items: center; overflow-y: auto; overflow-x: hidden;
+    padding: var(--sp-6) var(--sp-4); background: var(--bg);
   }
-  .orb { position: absolute; border-radius: 50%; filter: blur(70px); opacity: 0.55; pointer-events: none; animation: drift 18s ease-in-out infinite; }
-  .o1 { width: 420px; height: 420px; left: -120px; top: -120px; background: var(--accent); opacity: 0.22; }
-  .o2 { width: 380px; height: 380px; right: -100px; bottom: -120px; background: var(--accent-2); opacity: 0.2; animation-delay: -6s; }
-  .o3 { width: 240px; height: 240px; right: 18%; top: 12%; background: var(--ok); opacity: 0.08; animation-delay: -12s; }
-  @keyframes drift { 0%, 100% { transform: translate(0, 0) scale(1); } 33% { transform: translate(40px, 30px) scale(1.08); } 66% { transform: translate(-30px, 20px) scale(0.95); } }
-  .langs {
-    position: fixed; top: 16px; left: 16px; z-index: 2; display: flex; gap: 2px; padding: 3px; border-radius: 12px;
-    background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line-soft);
-  }
-  .langs button { padding: 5px 10px; font-size: 12px; font-weight: 600; border: none; border-radius: 9px; background: transparent; color: var(--muted); }
-  .langs button.on, .langs button.on:hover:not(:disabled) { background: var(--accent); color: #fff; }
-  .modes { display: flex; flex-direction: column; gap: 8px; }
-  .mode {
-    display: flex; gap: 12px; align-items: flex-start; text-align: left; padding: 12px; border-radius: 14px;
-    background: var(--raised); border: 1px solid var(--line-soft); color: var(--text); transition: border-color 0.2s, background 0.2s;
-    white-space: normal; height: auto; width: 100%; font-weight: normal;
-  }
-  .mode.sel { border-color: var(--accent); background: var(--accent-soft); }
-  .mode-ico { width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--bg); color: var(--accent); }
-  .mode-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-  .mode-text .small { line-height: 1.4; }
-  .rec { font-size: 11px; font-weight: 600; color: var(--ok); margin-left: 4px; }
-  .radio { width: 16px; height: 16px; flex: none; margin-top: 2px; border-radius: 50%; border: 2px solid var(--line); }
-  .mode.sel .radio { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
-  .theme { position: fixed; top: 16px; right: 16px; z-index: 2; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--line-soft); }
+  .top { position: fixed; top: var(--sp-4); z-index: 2; display: flex; gap: 2px; }
+  .top.left { left: var(--sp-4); padding: 2px; border-radius: var(--r-md); background: var(--surface-1); border: 1px solid var(--border); }
+  .top.right { right: var(--sp-4); }
+  .lang { height: 24px; padding: 0 8px; font-size: var(--fs-xs); font-weight: var(--fw-semibold); border: none; border-radius: var(--r-sm); background: transparent; color: var(--muted); }
+  .lang:hover:not(:disabled) { background: var(--hover); color: var(--text); border: none; }
+  .lang.on, .lang.on:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-fg); }
 
   .box {
-    position: relative; z-index: 1; width: min(420px, 100%); padding: 30px; border-radius: var(--radius-xl);
-    background: var(--glass); border: 1px solid var(--line-soft);
-    box-shadow: var(--shadow-lg); backdrop-filter: blur(24px) saturate(1.4);
-    animation: rise 0.5s var(--spring);
+    width: min(400px, 100%); padding: var(--sp-8); border-radius: var(--r-xl); display: flex; flex-direction: column; gap: var(--sp-5);
+    background: var(--surface-1); border: 1px solid var(--border); box-shadow: var(--shadow-md);
   }
-  .step { animation: fade-up 0.32s var(--ease); }
-  .hero { display: flex; gap: 14px; align-items: center; margin-bottom: 6px; }
-  .mark {
-    width: 48px; height: 48px; border-radius: 15px; flex: none; position: relative; overflow: hidden;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: var(--glow);
-  }
-  .mark span { position: absolute; inset: 11px; border-radius: 50%; border: 3.5px solid rgba(255, 255, 255, 0.95); border-right-color: transparent; transform: rotate(-30deg); animation: spin 6s linear infinite; }
-  .mark::after { content: ''; position: absolute; width: 9px; height: 9px; border-radius: 50%; background: #fff; left: 19.5px; top: 19.5px; }
+  .step { display: flex; flex-direction: column; gap: var(--sp-4); }
+  .hero { display: flex; gap: var(--sp-3); align-items: center; }
+  .hero h1 { font-size: var(--fs-xl); line-height: var(--lh-xl); }
+  .hero p { font-size: var(--fs-sm); margin-top: 2px; }
+  .mark { width: 40px; height: 40px; flex: none; border-radius: var(--r-lg); display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); }
+  .lead { margin-top: var(--sp-1); line-height: 1.5; }
 
-  .profiles { display: flex; flex-direction: column; gap: 6px; }
-  .prof { display: flex; gap: 6px; align-items: center; }
-  .pick { flex: 1; display: flex; align-items: center; gap: 12px; text-align: left; padding: 8px 12px 8px 8px; border-radius: 14px; color: var(--text); }
-  .pick :global(svg:last-child) { color: var(--faint); transition: transform 0.3s var(--spring); }
-  .pick:hover:not(:disabled) :global(svg:last-child) { transform: translateX(3px); color: var(--accent); }
-  .del:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
-  .del-confirm { padding: 12px; margin: 2px 0 4px; border-radius: 14px; background: var(--raised); border: 1px solid var(--line-soft); animation: pop 0.25s var(--spring) both; }
-  .del-confirm .row { gap: 8px; }
-  .danger { background: var(--danger); color: #fff; }
-  .danger:disabled { opacity: 0.5; }
-  .ghost { background: var(--raised); color: var(--text); border: 1px solid var(--line-soft); }
-
-  .who { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 4px 0; }
-  .big { height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 14.5px; }
-  .spinner.light { border-color: rgba(255, 255, 255, 0.35); border-top-color: #fff; }
-  .links { margin-top: -4px; }
-  .remember { gap: 8px; font-size: 13px; }
-  .seg { align-self: stretch; }
-  .pp { margin-top: 8px; }
-  .meter { height: 4px; border-radius: 4px; background: var(--raised); overflow: hidden; margin-top: -6px; }
-  .meter span { display: block; height: 100%; background: var(--danger); border-radius: 4px; transition: width 0.3s var(--ease), background 0.3s; }
-  .meter span.ok { background: var(--warn); }
-  .meter span.good { background: var(--ok); }
-
-  .words {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px;
-    margin: 0; padding: 0; list-style: none;
+  .profiles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+  .prof { display: flex; gap: var(--sp-1); align-items: center; }
+  .pick {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-3); text-align: left; height: 48px;
+    padding: 0 var(--sp-3) 0 var(--sp-2); border-radius: var(--r-md); color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
   }
-  .words li {
-    display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px;
-    background: var(--raised); border: 1px solid var(--line-soft); animation: pop 0.35s var(--spring) both;
+  .pick :global(svg:last-child) { color: var(--faint); }
+  .pick:hover:not(:disabled) :global(svg:last-child) { color: var(--accent-fg); }
+  .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--fw-medium); }
+  .del-confirm { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-3); margin: var(--sp-1) 0; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border); }
+  .add { align-items: flex-end; }
+
+  .who { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); text-align: center; }
+  .links { margin-top: calc(var(--sp-1) * -1); }
+  .pp { margin-top: var(--sp-2); }
+  .meter { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: -6px; }
+  .meter span { height: 3px; border-radius: 2px; background: var(--surface-3); transition: background var(--dur) var(--ease); }
+  .meter.weak span:nth-child(1) { background: var(--danger); }
+  .meter.ok span:nth-child(-n + 2) { background: var(--warn); }
+  .meter.good span { background: var(--ok); }
+
+  .words { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+  .words li { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 10px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--border); }
+  .words .n { color: var(--faint); font-size: var(--fs-2xs); width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+  .words .mono { color: var(--text); font-size: var(--fs-sm); word-break: normal; }
+
+  .modes { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .mode {
+    display: flex; gap: var(--sp-3); align-items: flex-start; text-align: left; padding: var(--sp-3); border-radius: var(--r-lg);
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text); white-space: normal; height: auto; width: 100%; font-weight: var(--fw-regular);
   }
-  .words .n { color: var(--faint); font-size: 11px; width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
-  .words .mono { color: var(--text); font-size: 13px; word-break: normal; }
-  .err { animation: shake 0.4s var(--ease); }
-  @keyframes shake { 0%, 100% { transform: none; } 25% { transform: translateX(-5px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
-  .killed { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid #c98a00; border-radius: 10px; background: color-mix(in srgb, #c98a00 12%, transparent); }
-  .killbtn { background: #c98a00; color: #fff; border-color: #c98a00; font-weight: 600; padding: 8px 14px; flex: none; }
-  .killbtn:hover:not(:disabled) { filter: brightness(1.08); }
+  .mode.sel, .mode.sel:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+  .mode-ico { width: 32px; height: 32px; flex: none; border-radius: var(--r-md); display: grid; place-items: center; background: var(--surface-1); color: var(--accent-fg); }
+  .mode-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+  .mode-text b { font-weight: var(--fw-semibold); }
+  .radio { width: 16px; height: 16px; flex: none; margin-top: 2px; border-radius: 50%; border: 2px solid var(--border-strong); }
+  .mode.sel .radio { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
+
+  .notice { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); font-size: var(--fs-sm); }
+  .notice.warn { background: var(--warn-soft); color: var(--warn-fg); }
+  .notice.held { flex-wrap: wrap; }
+  .notice.held .grow { flex: 1 1 200px; line-height: 1.45; }
+  .held-btn { flex-basis: 100%; padding-left: 24px; }
+  .notice.err { background: var(--danger-soft); color: var(--danger-fg); }
 </style>
-

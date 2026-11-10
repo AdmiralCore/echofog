@@ -72,3 +72,9 @@ export const tr = (key, params) => translate(get(lang), key, params);
 
 /** BCP 47 tag for Intl / toLocale* formatting */
 export const intlLocale = () => (get(lang) === 'ru' ? 'ru-RU' : 'en-US');
+
+/** adds a string module at run time (the dev gallery uses it so its texts stay out of the real build) */
+export function addStrings(m) {
+  for (const l of Object.keys(dict)) Object.assign(dict[l], m?.[l] || {});
+  locale.update((v) => v); // re-render with the new strings
+}

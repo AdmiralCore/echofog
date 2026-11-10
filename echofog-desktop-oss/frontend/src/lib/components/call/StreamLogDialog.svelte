@@ -9,7 +9,10 @@
   import { chats } from '../../stores/chats.js';
   import { sendPaths } from '../../stores/files.js';
   import { summaryText } from '../../services/streamlog.js';
-  import Icon from '../ui/Icon.svelte';
+  import Button from '../ui/Button.svelte';
+  import Sheet from '../ui/Sheet.svelte';
+  import Select from '../ui/Select.svelte';
+  import Badge from '../ui/Badge.svelte';
   import { t } from '../../i18n/index.js';
 
   export let log;
@@ -56,66 +59,36 @@
       sending = false;
     }
   }
-
-  function portal(node) {
-    document.body.appendChild(node);
-    return { destroy: () => node.remove() };
-  }
+  $: options = targets.map((c) => ({ value: c.id, label: c.name }));
 </script>
 
-<svelte:window on:keydown={(e) => e.key === 'Escape' && close()} />
+<Sheet title={$t('call.log.title')} hint={$t('call.log.hint')} width={680} on:close={close}>
+  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+  <pre class="text mono" tabindex="0" aria-label={$t('call.log.title')}>{text}</pre>
+  <p class="small faint">{$t('call.log.inside', { s: log.summary.seconds, n: log.lines })}</p>
+  {#if error}<p class="small error" role="alert">{error}</p>{/if}
+  {#if savedPath}<p class="small muted" role="status">{$t('call.log.saved', { path: savedPath })}</p>{/if}
+  {#if sentTo}<p class="small ok-text" role="status"><Badge variant="ok" icon="check">{$t('call.log.sent', { name: sentTo })}</Badge></p>{/if}
 
-<div class="layer" use:portal>
-  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="backdrop" on:click={close}></div>
-  <div class="dialog" role="dialog" aria-label={$t('call.log.title')}>
-    <header>
-      <div class="grow">
-        <h2>{$t('call.log.title')}</h2>
-        <p class="small muted">{$t('call.log.hint')}</p>
-      </div>
-      <button class="icon" title={$t('common.close')} aria-label={$t('common.close')} on:click={close}><Icon name="close" size={18} /></button>
-    </header>
-
-    <pre class="text mono">{text}</pre>
-    <p class="small faint">{$t('call.log.inside', { s: log.summary.seconds, n: log.lines })}</p>
-    {#if error}<p class="small error">{error}</p>{/if}
-
-    <div class="row btns">
-      <button class="with-icon" on:click={copySummary}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? $t('common.copied') : $t('call.log.copy')}</button>
-      <button class="with-icon" on:click={save}><Icon name="download" size={14} /> {$t('call.log.save')}</button>
-    </div>
-    {#if savedPath}<p class="small muted">{$t('call.log.saved', { path: savedPath })}</p>{/if}
-
+  <svelte:fragment slot="footer">
+    <Button icon={copied ? 'check' : 'copy'} on:click={copySummary}>{copied ? $t('common.copied') : $t('call.log.copy')}</Button>
+    <Button icon="download" on:click={save}>{$t('call.log.save')}</Button>
+    <span class="grow"></span>
     {#if targets.length}
-      <div class="row send">
-        <select bind:value={chatId} aria-label={$t('call.log.chat')}>
-          {#each targets as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
-        </select>
-        <button class="primary with-icon" on:click={send} disabled={sending || !chatId}><Icon name="send" size={14} /> {$t('call.log.send')}</button>
+      <div class="sendrow">
+        <div class="pick"><Select size="sm" bind:value={chatId} {options} aria-label={$t('call.log.chat')} /></div>
+        <Button variant="primary" icon="send" loading={sending} disabled={!chatId} on:click={send}>{$t('call.log.send')}</Button>
       </div>
-      {#if sentTo}<p class="small ok">{$t('call.log.sent', { name: sentTo })}</p>{/if}
     {/if}
-  </div>
-</div>
+  </svelte:fragment>
+</Sheet>
 
 <style>
-  .layer { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 24px; }
-  .backdrop { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(6px); }
-  .dialog {
-    position: relative; width: min(680px, 100%); max-height: min(86vh, 900px); overflow: auto;
-    display: flex; flex-direction: column; gap: 12px; padding: 20px;
-    background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
-  }
-  header { display: flex; gap: 12px; align-items: flex-start; }
-  header p { margin-top: 4px; }
   .text {
-    margin: 0; padding: 12px; overflow: auto;
-    background: var(--raised); border-radius: 12px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    margin: 0; padding: var(--sp-3); overflow: auto; min-height: 120px; max-height: 40vh;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg);
+    font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
   }
-  .btns { gap: 8px; flex-wrap: wrap; }
-  .send { gap: 8px; }
-  .send select { flex: 1; min-width: 0; }
-  .ok { color: var(--color-success); }
+  .sendrow { display: flex; align-items: center; gap: var(--sp-2); flex: 0 1 auto; }
+  .pick { min-width: 140px; max-width: 220px; }
 </style>

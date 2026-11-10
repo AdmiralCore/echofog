@@ -2,11 +2,12 @@
   import { t } from '../../i18n/index.js';
   import { PERM, hexColor } from '../../perms.js';
   import Pills from '../../components/ui/Pills.svelte';
+  import Tooltip from '../../components/ui/Tooltip.svelte';
 
   /** What roles may do in one channel otherwise than in the group (a channel's settings): for
-   *  everyone, or for one role, each of the channel's permissions taken, as in the group, or
-   *  granted. The core refuses changing a role at or above one's own rank, or granting what one
-   *  may not do. */
+   *  everyone, or for one role, each of the channel's permissions forbidden here, left as the role has it
+   *  in the group, or allowed here. "As the role" says what that is now. The core refuses changing a role
+   *  at or above one's own rank, or granting what one may not do. */
   export let overrides = []; // [{ role, allow, deny }], role '*' for everyone
   export let roles = []; // the group's roles (GroupRoles), the owner's left out
   export let voice = false;
@@ -30,31 +31,49 @@
   // a role whose permissions here differ from the group's is marked
   $: roleItems = [{ value: '*', label: $t('chats.everyone') + (changed('*') ? ' •' : '') },
     ...roles.map((r) => ({ value: r.id, label: roleName(r) + (changed(r.id) ? ' •' : ''), color: hexColor(r.color) || 'var(--faint)' }))];
+
+  // what "as the role" means: the group's permissions of the chosen role (for everyone: of a plain member)
+  $: base = role === '*' ? roles.find((r) => r.id === 'member') : roles.find((r) => r.id === role);
+  const inherited = (b, p) => (b && typeof b.perms === 'number' ? (b.perms & PERM[p] ? 'allow' : 'deny') : '');
+  $: baseName = role === '*' ? $t('chats.role.member') : base ? roleName(base) : '';
 </script>
 
 <div class="cperms">
-  <span class="small faint">{$t('chats.channelPerms')}</span>
+  <p class="small muted">{$t('cset.permsIntro')}</p>
   <Pills items={roleItems} bind:value={role} label={$t('chats.channelPerms')} />
-  {#each perms as p (p)}
-    <div class="cp-row">
-      <span class="grow small">{$t('chats.perm.' + p)}</span>
-      <div class="tri" role="radiogroup" aria-label={$t('chats.perm.' + p)}>
-        <button type="button" class="deny" class:on={stateOf(cur, p) === 'deny'} title={$t('chats.permDeny')} aria-label={$t('chats.permDeny')} on:click={() => set(p, 'deny')}>✕</button>
-        <button type="button" class:on={stateOf(cur, p) === ''} title={$t('chats.permInherit')} aria-label={$t('chats.permInherit')} on:click={() => set(p, '')}>/</button>
-        <button type="button" class="allow" class:on={stateOf(cur, p) === 'allow'} title={$t('chats.permAllow')} aria-label={$t('chats.permAllow')} on:click={() => set(p, 'allow')}>✓</button>
+  <div class="rows">
+    {#each perms as p (p)}
+      {@const st = stateOf(cur, p)}
+      {@const inh = inherited(base, p)}
+      <div class="cp-row">
+        <div class="grow">
+          <span class="nm">{$t('chats.perm.' + p)}</span>
+          {#if st === ''}<span class="now small" class:ok={inh === 'allow'} class:no={inh === 'deny'}>{inh ? $t('cset.now.' + inh) : $t('cset.nowUnknown')}</span>{/if}
+        </div>
+        <div class="tri" role="radiogroup" aria-label={$t('chats.perm.' + p)}>
+          <Tooltip text={$t('cset.denyTip')}><button type="button" role="radio" aria-checked={st === 'deny'} class="deny" class:on={st === 'deny'} on:click={() => set(p, 'deny')}>{$t('cset.deny')}</button></Tooltip>
+          <Tooltip text={$t('cset.inheritTip', { role: baseName || $t('chats.everyone') })}><button type="button" role="radio" aria-checked={st === ''} class:on={st === ''} on:click={() => set(p, '')}>{$t('cset.inherit')}</button></Tooltip>
+          <Tooltip text={$t('cset.allowTip')}><button type="button" role="radio" aria-checked={st === 'allow'} class="allow" class:on={st === 'allow'} on:click={() => set(p, 'allow')}>{$t('cset.allow')}</button></Tooltip>
+        </div>
       </div>
-    </div>
-  {/each}
+    {/each}
+  </div>
   <p class="small faint">{$t('chats.channelPermsHint')}</p>
 </div>
 
 <style>
-  .cperms { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border, rgba(127, 127, 127, 0.2)); }
-  .cp-row { display: flex; align-items: center; gap: 8px; min-height: 26px; }
-  .tri { display: inline-flex; border-radius: 7px; overflow: hidden; border: 1px solid var(--border, rgba(127, 127, 127, 0.3)); flex: none; }
-  .tri button { width: 26px; height: 22px; padding: 0; border: 0; border-radius: 0; background: none; color: var(--faint); font-size: 12px; line-height: 22px; cursor: pointer; }
-  .tri button + button { border-left: 1px solid var(--border, rgba(127, 127, 127, 0.3)); }
-  .tri button.on { background: var(--accent-soft); color: var(--text); }
-  .tri button.deny.on { background: rgba(229, 72, 77, 0.22); color: #e5484d; }
-  .tri button.allow.on { background: rgba(70, 167, 88, 0.22); color: #46a758; }
+  .cperms { display: flex; flex-direction: column; gap: var(--sp-3); }
+  .rows { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+  .cp-row { display: flex; align-items: center; gap: var(--sp-3); min-height: 48px; padding: 6px var(--sp-3); }
+  .cp-row + .cp-row { border-top: 1px solid var(--border); }
+  .nm { display: block; font-size: var(--fs-md); }
+  .now { color: var(--faint); }
+  .now.ok { color: var(--ok-fg); }
+  .now.no { color: var(--danger-fg); }
+  .tri { display: inline-flex; padding: 2px; gap: 2px; border-radius: var(--r-lg); background: var(--surface-2); flex: none; }
+  .tri button { height: 28px; padding: 0 var(--sp-3); border: 0; border-radius: var(--r-md); background: none; color: var(--muted); font-size: var(--fs-sm); font-weight: var(--fw-medium); white-space: nowrap; }
+  .tri button:hover:not(.on):not(:disabled) { color: var(--text); background: var(--hover); border: 0; }
+  .tri button.on { background: var(--surface-3); color: var(--text); box-shadow: var(--shadow-sm); }
+  .tri button.deny.on { background: var(--danger-soft); color: var(--danger-fg); }
+  .tri button.allow.on { background: var(--ok-soft); color: var(--ok-fg); }
 </style>

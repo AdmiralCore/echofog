@@ -60,7 +60,7 @@
     .pop-layer {
         position: fixed;
         inset: 0;
-        z-index: 1000;
+        z-index: var(--z-menu);
         pointer-events: none;
     }
     .pop-backdrop {
@@ -74,17 +74,16 @@
         overflow-y: auto;
         overscroll-behavior: contain;
         padding: 6px;
-        border-radius: 14px;
-        background: var(--glass);
-        backdrop-filter: blur(18px) saturate(1.4);
-        border: 1px solid var(--line-soft);
+        border-radius: var(--r-xl);
+        background: var(--surface-1);
+        border: 1px solid var(--border-strong);
         box-shadow: var(--shadow-lg);
         color: var(--text);
-        font-size: 13.5px;
-        animation: pop-in 0.3s var(--spring);
+        font-size: var(--fs-md);
+        animation: pop-in var(--dur) var(--ease);
     }
     @keyframes pop-in {
-        from { opacity: 0; transform: translateY(6px) scale(0.96); }
+        from { opacity: 0; transform: translateY(4px); }
         to { opacity: 1; transform: none; }
     }
 </style>

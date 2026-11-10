@@ -8,6 +8,9 @@
   import { onMount, createEventDispatcher } from 'svelte';
   import { App, errText, copy, openURL } from '../api.js';
   import Icon from './ui/Icon.svelte';
+  import Button from './ui/Button.svelte';
+  import Sheet from './ui/Sheet.svelte';
+  import Badge from './ui/Badge.svelte';
   import { t } from '../i18n/index.js';
 
   const dispatch = createEventDispatcher();
@@ -48,59 +51,59 @@
     }
     openURL(url);
   }
-
-  function portal(node) {
-    document.body.appendChild(node);
-    return { destroy: () => node.remove() };
-  }
 </script>
 
-<svelte:window on:keydown={(e) => e.key === 'Escape' && close()} />
-
-<div class="layer" use:portal>
-  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="backdrop" on:click={close}></div>
-  <div class="dialog" role="dialog" aria-label={$t('report.title')}>
-    <header>
-      <div class="grow">
-        <h2>{$t('report.title')}</h2>
-        <p class="small muted">{$t('report.hint')}</p>
+<Sheet title={$t('report.title')} hint={$t('report.hint')} width={720} on:close={close}>
+  {#if error}<p class="small error" role="alert">{error}</p>{/if}
+  {#if report}
+    <section class="what" aria-label={$t('report.willSend')}>
+      <div class="col">
+        <div class="eyebrow">{$t('report.willSend')}</div>
+        <p class="small muted">{$t('report.included')}</p>
+        {#if report.country || report.provider}
+          <div class="row wrap tags">
+            {#if report.country}<Badge variant="neutral">{report.country}</Badge>{/if}
+            {#if report.provider}<Badge variant="neutral">{report.provider}</Badge>{/if}
+          </div>
+        {/if}
       </div>
-      <button class="icon" title={$t('common.close')} aria-label={$t('common.close')} on:click={close}><Icon name="close" size={18} /></button>
-    </header>
-
-    {#if error}<p class="small error">{error}</p>{/if}
+      <div class="col">
+        <div class="eyebrow">{$t('report.removedTitle')}</div>
+        <p class="small muted"><Icon name="shield" size={14} /> {$t('report.removed')}</p>
+      </div>
+    </section>
+    <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+    <pre class="text mono" tabindex="0" aria-label={$t('report.title')}>{report.text}</pre>
+    <p class="small hint"><Icon name="eye" size={14} /> {$t('report.check')}</p>
+    {#if savedPath}<p class="small muted" role="status">{$t('report.saved', { path: savedPath })}</p>{/if}
+    <p class="small faint">{$t('report.nothingSent')} {$t('report.issueHint')}</p>
+  {:else if !error}
+    <p class="small muted">{$t('report.building')}</p>
+  {/if}
+  <svelte:fragment slot="footer">
     {#if report}
-      <pre class="text mono">{report.text}</pre>
-      <p class="small warn"><Icon name="eye" size={14} /> {$t('report.check')}</p>
-      <div class="row btns">
-        <button class="with-icon" on:click={copyReport}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? $t('common.copied') : $t('common.copy')}</button>
-        <button class="with-icon" on:click={save}><Icon name="download" size={14} /> {$t('common.save')}</button>
-        <button class="primary with-icon" on:click={openIssue}><Icon name="external" size={14} /> {$t('report.issue')}</button>
-      </div>
-      {#if savedPath}<p class="small muted">{$t('report.saved', { path: savedPath })}</p>{/if}
-      <p class="small faint">{$t('report.issueHint')}</p>
-    {:else if !error}
-      <p class="small muted">{$t('report.building')}</p>
+      <Button icon={copied ? 'check' : 'copy'} on:click={copyReport}>{copied ? $t('common.copied') : $t('common.copy')}</Button>
+      <Button icon="download" on:click={save}>{$t('common.save')}</Button>
+      <span class="grow"></span>
+      <Button variant="primary" icon="external" on:click={openIssue}>{$t('report.issue')}</Button>
+    {:else}
+      <span class="grow"></span>
+      <Button on:click={close}>{$t('common.close')}</Button>
     {/if}
-  </div>
-</div>
+  </svelte:fragment>
+</Sheet>
 
 <style>
-  .layer { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 24px; }
-  .backdrop { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(6px); }
-  .dialog {
-    position: relative; width: min(760px, 100%); max-height: min(86vh, 900px);
-    display: flex; flex-direction: column; gap: 12px; padding: 20px;
-    background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
-  }
-  header { display: flex; gap: 12px; align-items: flex-start; }
-  header p { margin-top: 4px; }
+  .what { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); padding: var(--sp-3); border-radius: var(--r-lg); background: var(--surface-2); }
+  .what .col { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+  .what p :global(svg) { vertical-align: -2px; color: var(--ok-fg); }
+  .tags { gap: var(--sp-1); margin-top: var(--sp-1); }
   .text {
-    margin: 0; padding: 12px; overflow: auto; min-height: 160px; max-height: 46vh;
-    background: var(--raised); border-radius: 12px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    margin: 0; padding: var(--sp-3); overflow: auto; min-height: 140px; max-height: 38vh;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg);
+    font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
   }
-  .btns { gap: 8px; flex-wrap: wrap; }
-  .warn { color: #c98a00; display: flex; gap: 6px; align-items: flex-start; }
+  .hint { display: flex; gap: 6px; align-items: flex-start; color: var(--warn-fg); }
+  .hint :global(svg) { flex: none; margin-top: 2px; }
+  @media (max-width: 560px) { .what { grid-template-columns: 1fr; } }
 </style>

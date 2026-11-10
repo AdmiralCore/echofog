@@ -183,24 +183,24 @@
 {/if}
 
 <style>
-  .backdrop { position: fixed; inset: 0; z-index: 10001; display: grid; place-items: center; padding: 16px; background: var(--scrim); backdrop-filter: blur(6px); }
+  .backdrop { position: fixed; inset: 0; z-index: 10001; display: grid; place-items: center; padding: 16px; background: var(--scrim); }
   .dlg {
     width: min(480px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 18px;
-    border-radius: 20px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+    border-radius: var(--r-xl); background: var(--surface-1); border: 1px solid var(--border-strong); box-shadow: var(--shadow-xl);
   }
   .head { display: flex; align-items: center; gap: 10px; }
-  .head h3 { margin: 0; font-size: 16px; }
-  .ico { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
-  .icon.tiny { width: 28px; height: 28px; border-radius: 8px; }
-  textarea { resize: none; font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.45; word-break: break-all; }
-  .what { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--raised); }
+  .head h3 { margin: 0; font-size: var(--fs-lg); }
+  .ico { width: 32px; height: 32px; border-radius: var(--r-lg); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-fg); flex: none; }
+  .icon.tiny { width: var(--ctl-sm); height: var(--ctl-sm); border-radius: var(--r-md); }
+  textarea { resize: none; font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-sm); line-height: var(--lh-sm); word-break: break-all; }
+  .what { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--r-lg); background: var(--surface-2); }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .file-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .file-row input { flex: 1; min-width: 140px; }
   .file-row .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
   .actions button { display: inline-flex; align-items: center; gap: 7px; }
   .actions input { flex: 1; min-width: 160px; }
-  .ok { color: var(--ok); display: flex; align-items: center; gap: 6px; margin: 0; }
+  .ok { color: var(--ok-fg); display: flex; align-items: center; gap: 6px; margin: 0; }
   .error { margin: 0; }
   .hint { margin: 0; line-height: 1.4; }
 </style>

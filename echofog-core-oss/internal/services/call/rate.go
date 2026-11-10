@@ -48,6 +48,8 @@ const (
 	floodDrops     = 100 // ... and that mean the queue overflowed
 )
 
+// sendRateState is the send rate control's memory, per room: the rate now, and what it needs to cut
+// and climb with sense (see next).
 type sendRateState struct {
 	kbps        float64
 	lastDropped uint64
@@ -69,6 +71,9 @@ const (
 	pathFlood = media.PathFlood
 )
 
+// rateTickLocked runs the rate control once per rateInterval: it grades the path (our own queue and
+// the viewers' reports), takes one step of the rate (next) and hands the result to each stream's
+// encoder: the desktop's own encoder through SetBitrate, the browser's through REMB. m.mu must be held.
 func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 	r := &room.sendRate
 	if now.Sub(r.at) < rateInterval {
@@ -105,7 +110,9 @@ func (m *CallManager) rateTickLocked(room *ActiveRoomState, now time.Time) {
 	if viewer.viewer == (types.PeerID{}) && !m.otherViewerLocked(room, weak.viewer, now) {
 		viewer = weak // the weak viewer is the one viewer: the stream is theirs to follow
 	}
-	level = max(level, viewer.fb.Level)
+	// A viewer's flood (a stall of a moment, its backlog arriving at once) is a heavy cut with the
+	// cooldown; only the own queue overflowing skips the cooldown, or one hiccup halves the rate twice.
+	level = max(level, min(viewer.fb.Level, pathHeavy))
 	floor := float64(rateFloorKbps * len(room.localStreams))
 	r.kbps = r.next(float64(capKbps), floor, level)
 	if viewer.fb.Level >= pathHeavy && viewer.fb.Kbps > 0 {

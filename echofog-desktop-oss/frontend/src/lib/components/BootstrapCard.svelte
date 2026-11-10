@@ -11,6 +11,11 @@
   import { short } from '../format.js';
   import { t } from '../i18n/index.js';
   import Icon from './ui/Icon.svelte';
+  import Button from './ui/Button.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import Input from './ui/Input.svelte';
+  import Badge from './ui/Badge.svelte';
+  import Toggle from './ui/Toggle.svelte';
 
   let st = { builtIn: [], custom: [], peers: 0, protocol: 1 };
   let input = '';
@@ -116,12 +121,12 @@
       <h2>{$t('boot.title')}</h2>
       <p class="small muted">{$t('boot.hint')}</p>
     </div>
-    <span class="chip" class:ok={st.peers > 0} class:warn={st.peers === 0}>{st.peers > 0 ? $t('boot.peers', { n: st.peers }) : $t('boot.noPeers')}</span>
+    <Badge variant={st.peers > 0 ? 'ok' : 'warn'} dot>{st.peers > 0 ? $t('boot.peers', { n: st.peers }) : $t('boot.noPeers')}</Badge>
   </div>
 
-  <form class="row" on:submit|preventDefault={add}>
-    <input class="grow" bind:this={field} bind:value={input} spellcheck="false" placeholder={v2 ? 'echofog://join?v=2&card=…' : 'echofog://relay/1.2.3.4:4001/…'} aria-label={$t('boot.inputLabel')} />
-    <button class="primary" type="submit" disabled={busy || !input.trim()}>{busy ? $t('common.working') : $t('boot.add')}</button>
+  <form class="addrow" on:submit|preventDefault={add}>
+    <div class="grow"><Input bind:el={field} bind:value={input} spellcheck="false" placeholder={v2 ? 'echofog://join?v=2&card=…' : 'echofog://relay/1.2.3.4:4001/…'} aria-label={$t('boot.inputLabel')} /></div>
+    <Button type="submit" variant="primary" loading={busy} disabled={!input.trim()}>{$t('boot.add')}</Button>
   </form>
   <p class="small faint">{$t(v2 ? 'boot.formatV2' : 'boot.format')}</p>
   {#if error}<p class="small error">{error}</p>{/if}
@@ -135,18 +140,16 @@
           <span class="dot" class:on={n.connected} title={n.connected ? $t('boot.connected') : $t('boot.notConnected')}></span>
           <span class="grow addr" title={n.link || label(n)}><span class="mono">{label(n)}</span>{#if n.peerId && n.addr} <span class="faint mono">/{short(n.peerId, 4)}</span>{/if}</span>
           {#if v2}
-            <span class="small" class:ok={n.connected} class:faint={!n.connected}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</span>
-            <button class="linky small" type="button" disabled={checking[keyOf(n)]} on:click={() => check(n)}>
-              {#if checking[keyOf(n)]}{$t('boot.checking')}{:else}{$t('boot.check')}{/if}
-            </button>
+            <Badge variant={n.connected ? 'ok' : 'neutral'}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</Badge>
+            <Button size="sm" variant="ghost" loading={checking[keyOf(n)]} on:click={() => check(n)}>{checking[keyOf(n)] ? $t('boot.checking') : $t('boot.check')}</Button>
             {#if checked[keyOf(n)] !== undefined}
-              <span class="small" class:ok={checked[keyOf(n)]} class:error={!checked[keyOf(n)]}>{checked[keyOf(n)] ? $t('boot.reachable') : $t('boot.unreachable')}</span>
+              <Badge variant={checked[keyOf(n)] ? 'ok' : 'danger'}>{checked[keyOf(n)] ? $t('boot.reachable') : $t('boot.unreachable')}</Badge>
             {/if}
           {:else}
-            <span class="small" class:ok={n.connected} class:faint={!n.connected}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</span>
-            <button class="icon tiny" title={$t('boot.copyLink')} aria-label={$t('boot.copyLink')} on:click={() => copyLink(n)}><Icon name={copied === (n.peerId || n.link) ? 'check' : 'copy'} size={14} /></button>
+            <Badge variant={n.connected ? 'ok' : 'neutral'}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</Badge>
+            <IconButton icon={copied === (n.peerId || n.link) ? 'check' : 'copy'} size="sm" label={$t('boot.copyLink')} on:click={() => copyLink(n)} />
           {/if}
-          <button class="icon tiny del" title={$t('common.remove')} aria-label={$t('common.remove')} on:click={() => remove(n)}><Icon name="trash" size={14} /></button>
+          <IconButton icon="trash" size="sm" variant="danger" label={$t('common.remove')} on:click={() => remove(n)} />
         </div>
       {/each}
     </div>
@@ -158,7 +161,7 @@
       {#each st.builtIn as n (keyOf(n))}
         <div class="node" class:off={!n.enabled}>
           {#if v2}
-            <input type="checkbox" checked={n.enabled} aria-label={$t('boot.enable')} on:change={(e) => setEnabled(n, e.currentTarget.checked)} />
+            <span class="sw" title={$t('boot.enable')}><Toggle checked={n.enabled} label={$t('boot.enable') + ': ' + label(n)} on:change={(e) => setEnabled(n, e.detail)} /></span>
           {:else}
             <span class="dot" class:on={n.connected}></span>
           {/if}
@@ -167,16 +170,14 @@
             {#if !n.enabled}
               <span class="small faint">{$t('boot.disabled')}</span>
             {:else}
-              <span class="small" class:ok={n.connected} class:faint={!n.connected}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</span>
-              <button class="linky small" type="button" disabled={checking[keyOf(n)]} on:click={() => check(n)}>
-                {#if checking[keyOf(n)]}{$t('boot.checking')}{:else}{$t('boot.check')}{/if}
-              </button>
+              <Badge variant={n.connected ? 'ok' : 'neutral'}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</Badge>
+              <Button size="sm" variant="ghost" loading={checking[keyOf(n)]} on:click={() => check(n)}>{checking[keyOf(n)] ? $t('boot.checking') : $t('boot.check')}</Button>
               {#if checked[keyOf(n)] !== undefined}
-                <span class="small" class:ok={checked[keyOf(n)]} class:error={!checked[keyOf(n)]}>{checked[keyOf(n)] ? $t('boot.reachable') : $t('boot.unreachable')}</span>
+                <Badge variant={checked[keyOf(n)] ? 'ok' : 'danger'}>{checked[keyOf(n)] ? $t('boot.reachable') : $t('boot.unreachable')}</Badge>
               {/if}
             {/if}
           {:else}
-            <span class="small" class:ok={n.connected} class:faint={!n.connected}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</span>
+            <Badge variant={n.connected ? 'ok' : 'neutral'}>{n.connected ? $t('boot.connected') : $t('boot.notConnected')}</Badge>
           {/if}
         </div>
       {/each}
@@ -187,13 +188,13 @@
 </div>
 
 <style>
+  .addrow { display: flex; gap: var(--sp-2); align-items: flex-start; }
   .nodes { display: flex; flex-direction: column; gap: 4px; }
-  .node { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--raised); animation: fade-up 0.25s var(--ease) both; }
+  .node { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-lg); background: var(--surface-2); }
   .node.off { opacity: 0.55; }
+  /* the switch is named by aria-label; its visible label would repeat the address next to it */
+  .sw :global(.txt) { display: none; }
+  .sw { flex: none; }
   .addr { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .addr .mono { word-break: normal; }
-  .icon.tiny { width: 28px; height: 28px; border-radius: 8px; }
-  .del:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
-  .linky { border: 0; background: none; padding: 0 4px; cursor: pointer; color: var(--accent); }
-  .linky:disabled { opacity: 0.6; cursor: default; }
 </style>

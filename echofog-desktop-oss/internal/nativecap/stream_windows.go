@@ -78,6 +78,9 @@ type Stream struct {
 	st    Stats
 }
 
+// nv12Slot is one NV12 frame: the converter writes it, the encoder reads it. It is busy from the moment
+// it goes to the encoder until the frame it made comes out of it (matched by pts, see onFrame), and is
+// not written meanwhile.
 type nv12Slot struct {
 	tex, view unsafe.Pointer
 	busy      bool
@@ -130,6 +133,7 @@ func (s *Stream) SetViewerRates(hz []int) {
 	s.viewers.Store(&hz)
 }
 
+// viewerRates is what SetViewerRates last gave (nil: no viewer reported a screen).
 func (s *Stream) viewerRates() []int {
 	if p := s.viewers.Load(); p != nil {
 		return *p
@@ -137,6 +141,8 @@ func (s *Stream) viewerRates() []int {
 	return nil
 }
 
+// closeEncoder closes an encoder with encMu held, so SetBitrate (called from the call's rate loop on
+// another goroutine) never touches one that is being closed.
 func (s *Stream) closeEncoder(e *mfEncoder) {
 	s.encMu.Lock()
 	e.close()
@@ -169,6 +175,13 @@ func (s *Stream) Stop() {
 // Done is closed once the stream ended, by Stop or by itself.
 func (s *Stream) Done() <-chan struct{} { return s.done }
 
+// run is the stream's goroutine, for its whole life. It opens everything in the order the pipeline
+// needs it (device, capture, converter, NV12 frames, packetizer, pacer, encoder), reports the outcome of
+// that to Start through ready, then loops on one select: a picture arrived, the frame beat, the encoder
+// asked for a frame, or the once-a-second check (source gone, GPU reset, encoder failed, quality ladder).
+// Everything it opened is released by defers in the reverse order, whatever ends the loop. A COM object
+// is only ever touched from this goroutine, the encoder's event goroutine and (for the bitrate)
+// SetBitrate, which is why it stays on one locked OS thread in the multithreaded apartment.
 func (s *Stream) run(ready chan<- error) {
 	defer close(s.done)
 	started := false
@@ -290,7 +303,11 @@ func (s *Stream) run(ready chan<- error) {
 		if err != nil {
 			return fmt.Errorf("encoder: %w", err)
 		}
+		s.encMu.Lock()
 		s.enc.Store(e)
+		// a SetBitrate that came while the encoder was being made went to the old one
+		e.setBitrate(uint32(min(s.bitrate.Load(), 1<<31)))
+		s.encMu.Unlock()
 		outW, outH, fps, waiting = w, h, l.FPS, false
 		clock = newFrameClock(fps, time.Now())
 		beat.Reset(time.Until(clock.next))
@@ -382,6 +399,8 @@ func (s *Stream) run(ready chan<- error) {
 	}
 }
 
+// makeSlots creates the nv12Slots NV12 frames of w x h and their render target views on conv. The
+// encoder-bind flag is tried first; drivers that do not know it get frames without it.
 func (s *Stream) makeSlots(d *device, conv *converter, w, h int) error {
 	for i := range s.slots {
 		desc := texture2DDesc{Width: uint32(w), Height: uint32(h), Format: dxgiFormatNV12, BindFlags: d3d11BindRenderTarget | d3d11BindVideoEncoder}
@@ -397,6 +416,8 @@ func (s *Stream) makeSlots(d *device, conv *converter, w, h int) error {
 	return s.remakeViews(conv)
 }
 
+// remakeViews makes the render target views of the NV12 frames again on a new converter (the source
+// window changed size; the frames keep the stream's size).
 func (s *Stream) remakeViews(conv *converter) error {
 	for i := range s.slots {
 		view, err := conv.outputView(s.slots[i].tex)
@@ -409,6 +430,7 @@ func (s *Stream) remakeViews(conv *converter) error {
 	return nil
 }
 
+// freeSlots releases the NV12 frames and their views.
 func (s *Stream) freeSlots() {
 	for i := range s.slots {
 		release(s.slots[i].view)
@@ -489,6 +511,6 @@ func (s *Stream) onFrame(f encodedFrame) {
 		s.st.Keyframes++
 	}
 	s.mu.Unlock()
-	ts := s.tsAt + uint32(f.pts*90000/time.Second)
+	ts := s.tsAt + uint32(f.pts/(time.Second/90000))
 	s.pk.frame(f.layered, f.data, ts, f.layer, f.keyframe, s.pacer.push)
 }

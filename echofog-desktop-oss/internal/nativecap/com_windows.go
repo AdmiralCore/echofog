@@ -58,11 +58,13 @@ type comError struct {
 	hr hresult
 }
 
+// Error says what was called and the HRESULT, by name where it is a known one.
 func (e *comError) Error() string { return fmt.Sprintf("%s: %s", e.op, hrName(e.hr)) }
 
 // HRESULT reports the code, for callers that tell failures apart.
 func (e *comError) HRESULT() int32 { return int32(e.hr) }
 
+// hrName is the name of an HRESULT this package meets, or its number.
 func hrName(hr hresult) string {
 	known := map[uint32]string{
 		0x80004002: "E_NOINTERFACE",
@@ -92,6 +94,7 @@ func hrName(hr hresult) string {
 	return "HRESULT 0x" + strconv.FormatUint(uint64(uint32(hr)), 16)
 }
 
+// err is a failure as an error saying what was called, nil for a success code.
 func (hr hresult) err(op string) error {
 	if hr < 0 {
 		return &comError{op: op, hr: hr}
@@ -130,18 +133,21 @@ const (
 	idxRelease        = 2
 )
 
+// release drops a reference of a COM object; nil is fine.
 func release(obj unsafe.Pointer) {
 	if obj != nil {
 		comCall(obj, idxRelease)
 	}
 }
 
+// addRef takes a reference of a COM object; nil is fine.
 func addRef(obj unsafe.Pointer) {
 	if obj != nil {
 		comCall(obj, idxAddRef)
 	}
 }
 
+// queryInterface asks a COM object for another of its interfaces; the caller releases the result.
 func queryInterface(obj unsafe.Pointer, iid *windows.GUID, op string) (unsafe.Pointer, error) {
 	var out unsafe.Pointer
 	if err := comCall(obj, idxQueryInterface, uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&out))).err(op); err != nil {
@@ -173,6 +179,7 @@ func guid(s string) windows.GUID {
 // hstring is a WinRT string.
 type hstring uintptr
 
+// newHString makes a WinRT string; the caller frees it.
 func newHString(s string) (hstring, error) {
 	u, err := windows.UTF16FromString(s)
 	if err != nil {
@@ -185,6 +192,7 @@ func newHString(s string) (hstring, error) {
 	return h, nil
 }
 
+// free releases a WinRT string.
 func (h hstring) free() {
 	if h != 0 {
 		procCall(procWindowsDeleteString, uintptr(h))

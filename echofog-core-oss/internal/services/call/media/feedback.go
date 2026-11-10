@@ -91,6 +91,7 @@ type rxMeter struct {
 	space     uint8 // what seq counts: unit seqs (capAll), or the packets of the layers up to it
 }
 
+// newRxMeter makes a meter that has seen nothing yet.
 func newRxMeter() *rxMeter { return &rxMeter{space: capAll} }
 
 // add takes a fragment that arrived at now (ms on this node's clock).
@@ -201,6 +202,7 @@ func (m *rxMeters) lost(streamID string, units int) {
 	m.mu.Unlock()
 }
 
+// drop forgets a stream's meter (it is not watched any more).
 func (m *rxMeters) drop(streamID string) {
 	m.mu.Lock()
 	delete(m.meters, streamID)

@@ -61,6 +61,7 @@ type viewerPath struct {
 	weak      bool
 }
 
+// add notes a rate tick's grade of the viewer's path, and when it was heavy.
 func (p *viewerPath) add(c media.Congestion, now time.Time) {
 	p.grades[p.n%pathSamples] = c
 	p.n++
@@ -176,13 +177,16 @@ func (m *CallManager) viewersLocked(room *ActiveRoomState, now time.Time) (stron
 			p.add(r.fb.Level, now)
 			seen[r.viewer] = true
 		}
+		changed := false
 		for v, p := range paths {
 			if !seen[v] && now.Sub(p.lastSeen) > weakRelease {
+				if p.weak {
+					changed = true // the coordinator must hear the viewer is no longer weak
+				}
 				delete(paths, v) // left, or went silent long ago
 			}
 		}
 		// a viewer is weak when its trouble is its own: another viewer's path was fine meanwhile
-		changed := false
 		for v, p := range paths {
 			heavy, _ := p.count(func(c media.Congestion) bool { return c >= media.PathHeavy })
 			others := false
