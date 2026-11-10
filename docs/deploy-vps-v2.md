@@ -190,7 +190,9 @@ $DC start node
 ```
 
 Replace the volume name with the one `docker volume ls` shows. Do not create a new profile just to
-change a role: a new `init` replaces the identity.
+change a role: when the folder already holds a profile, `init` stops with "already holds a server
+profile" and changes nothing. The identity is lost only on an empty volume, that is, after `$DC down -v`
+(section 10).
 
 To add invitations to an existing profile, the key `server.json` needs is:
 
@@ -411,6 +413,7 @@ cd ../.. && rm -rf echofog
 | Clock warnings in `status` or `doctor` | Time is not synchronised | `timedatectl set-ntp true` |
 | `doctor` reports little disk space | Docker images, logs or the host's own data | `docker system prune`, check `df -h /`; log size is capped by the compose file |
 | `exec` says the node is not running | The container is stopped, or the profile has no `operator.addr` | `$DC ps`, `$DC logs --tail=100 node` |
+| `cat`, `exec` or a write in `/data` answers `Permission denied`, or `doctor` says a file or folder is open to others | The files in the volume belong to another uid (edited from the host as root) or carry group/other bits, while the node runs as `1000:1000` (`user:` in the compose file) and the entrypoint sets `umask 077` | `$DC stop node`, then in a temporary container `chown -R 1000:1000 /data` plus `chmod 700` on the folder and `600` on its files (section 5), `$DC start node`. Edit `server.json` only that way, then run `$DC exec node echofog-node v2 doctor --data /data` |
 | Health is `unhealthy` | The process is up but the operator API does not answer | Read the log; the API writes `operator.addr` in `/data` when it starts |
 
 ## 12. Installing without Docker
