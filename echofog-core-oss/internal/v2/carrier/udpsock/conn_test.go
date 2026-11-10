@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -309,6 +310,28 @@ func TestTransportConn(t *testing.T) {
 	}
 }
 
+// waitForChunk waits until the receiver accounts for every datagram below end. A chunk is one write
+// away and fits the receive buffer, so a datagram that does not arrive within stallTimeout was
+// lost: the error names the chunk instead of waiting for a read deadline. The counter, the signals
+// and the timeout are passed in, so the wait can be tested without a socket.
+func waitForChunk(count func() int, from, end int, wake, stop <-chan struct{}, stopErr func() error, timeout <-chan time.Time) error {
+	for count() < end {
+		select {
+		case <-wake:
+		case <-stop:
+			if err := stopErr(); err != nil {
+				return err
+			}
+			return fmt.Errorf("receiver stopped at %d of %d datagrams", count(), totalDatagrams)
+		case <-timeout:
+			return fmt.Errorf("chunk [%d,%d) is not delivered: the receiver holds %d of %d datagrams after %s;"+
+				" a chunk of at most %d datagrams fits the %d-byte receive buffer, so a datagram was lost, not delayed",
+				from, end, count(), totalDatagrams, stallTimeout, maxWriteBatch, testRecvBuffer)
+		}
+	}
+	return nil
+}
+
 // runDatagrams sends the whole sequence through one socket pair and fails on the first datagram
 // that is lost, duplicated or altered. Both paths produce the same verified sequence.
 //
@@ -380,19 +403,9 @@ func runDatagrams(t *testing.T, opt Options, batched bool) {
 	awaitChunk := func(from, end int) {
 		timer := time.NewTimer(stallTimeout)
 		defer timer.Stop()
-		for int(got.Load()) < end {
-			select {
-			case <-wake:
-			case <-stop:
-				if recvErr != nil {
-					t.Fatal(recvErr)
-				}
-				t.Fatalf("receiver stopped at %d of %d datagrams", got.Load(), totalDatagrams)
-			case <-timer.C:
-				t.Fatalf("chunk [%d,%d) is not delivered: the receiver holds %d of %d datagrams after %s;"+
-					" a chunk of at most %d datagrams fits the %d-byte receive buffer, so a datagram was lost, not delayed",
-					from, end, got.Load(), totalDatagrams, stallTimeout, maxWriteBatch, testRecvBuffer)
-			}
+		count := func() int { return int(got.Load()) }
+		if err := waitForChunk(count, from, end, wake, stop, func() error { return recvErr }, timer.C); err != nil {
+			t.Fatal(err)
 		}
 	}
 
@@ -435,6 +448,100 @@ func TestTenThousandDatagramsSinglePath(t *testing.T) {
 
 func TestTenThousandDatagramsBatchedPath(t *testing.T) {
 	runDatagrams(t, Options{}, true)
+}
+
+// TestWaitForChunkEnding pins how the wait for a chunk ends against the counter. The receiver
+// closes stop right after it counts the last batch, so wake and stop can both be ready while the
+// sender waits: a stop that raced the final datagram is a finished run, not a stall. A stop or a
+// timeout below the chunk end is a real loss and must stay one.
+func TestWaitForChunkEnding(t *testing.T) {
+	cases := []struct {
+		name    string
+		counts  []int // what the counter reports; the last value repeats
+		end     int
+		wake    bool
+		stop    bool
+		timeout bool
+		stopErr error
+		wantErr string
+	}{
+		{
+			name:   "stop after the counter reached the end",
+			counts: []int{99, 100},
+			end:    100,
+			stop:   true,
+		},
+		{
+			name:    "timeout after the counter reached the end",
+			counts:  []int{99, 100},
+			end:     100,
+			timeout: true,
+		},
+		{
+			name:   "wake, then the counter reaches the end",
+			counts: []int{99, 100},
+			end:    100,
+			wake:   true,
+		},
+		{
+			name:    "stop below the end",
+			counts:  []int{99},
+			end:     100,
+			stop:    true,
+			wantErr: "receiver stopped at 99 of 10000 datagrams",
+		},
+		{
+			name:    "receiver error wins over the stop",
+			counts:  []int{99},
+			end:     100,
+			stop:    true,
+			stopErr: errors.New("boom"),
+			wantErr: "boom",
+		},
+		{
+			name:    "timeout below the end",
+			counts:  []int{99},
+			end:     100,
+			timeout: true,
+			wantErr: "chunk [0,100) is not delivered",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reads := 0
+			count := func() int {
+				i := reads
+				if i >= len(tc.counts) {
+					i = len(tc.counts) - 1
+				}
+				reads++
+				return tc.counts[i]
+			}
+			wake := make(chan struct{}, 1)
+			if tc.wake {
+				wake <- struct{}{}
+			}
+			stop := make(chan struct{})
+			if tc.stop {
+				close(stop)
+			}
+			timeout := make(chan time.Time)
+			if tc.timeout {
+				close(timeout)
+			}
+
+			err := waitForChunk(count, 0, tc.end, wake, stop, func() error { return tc.stopErr }, timeout)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("waitForChunk: %v, want the chunk accounted for", err)
+			case tc.wantErr == "":
+			case err == nil:
+				t.Fatalf("waitForChunk returned nil, want %q", tc.wantErr)
+			case !strings.Contains(err.Error(), tc.wantErr):
+				t.Fatalf("waitForChunk: %q, want %q", err, tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestReadDeadlineIsNotABatchFailure(t *testing.T) {
