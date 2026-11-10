@@ -82,9 +82,13 @@ func TestRoom_ViewerReportsBringTheRateDownToTheirLink(t *testing.T) {
 	enc.run(b.cm)
 	defer enc.halt()
 
+	// The rate control grades a path on two 250 ms report windows and steps once per 500 ms tick,
+	// so a quiet machine brings the rate down in 0.8-1.3 s. 45 s is a ceiling for a runner whose
+	// ticks are starved under -race and two packages on two cores, not a retry: the rate only
+	// falls, and the window also leaves the stream at the link before the drop count below.
 	var settled time.Duration
 	start := time.Now()
-	for time.Since(start) < 15*time.Second {
+	for time.Since(start) < 45*time.Second {
 		time.Sleep(250 * time.Millisecond)
 		if settled == 0 && enc.bps.Load() <= 4000_000 {
 			settled = time.Since(start)
@@ -101,10 +105,13 @@ func TestRoom_ViewerReportsBringTheRateDownToTheirLink(t *testing.T) {
 	assert.Less(t, float64(dropped), 0.02*float64(dropped+passed), "the stream fits its link")
 	assert.Greater(t, enc.bps.Load(), uint64(2000_000), "and still uses most of it")
 
-	// the link widens: the rate climbs back
+	// the link widens: the rate climbs back. Climbing is slower than falling: the control waits
+	// four clean ticks and then adds 6% a tick, so 4 -> 8 Mbit/s took 7.6-13 s on a quiet 12-vCPU
+	// machine and more than 15 s on the CI race job (two packages on two cores). 30 s is over
+	// twice the measured worst; the checks are the same.
 	m.shape(b.id, v.id, 0, 0)
 	low, wide := enc.bps.Load(), time.Now()
-	require.Eventually(t, func() bool { return enc.bps.Load() > 2*low }, 15*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return enc.bps.Load() > 2*low }, 30*time.Second, 100*time.Millisecond,
 		"the rate stayed at %d kbps", enc.bps.Load()/1000)
 	t.Logf("the link widened: the rate doubled in %v", time.Since(wide).Round(100*time.Millisecond))
 }
