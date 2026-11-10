@@ -236,8 +236,8 @@ func TestResponderAnswerAtMostThreeTimesReceived(t *testing.T) {
 
 func TestDefaultProfileInitLenWithin1200(t *testing.T) {
 	p := mustProfile(t)
-	if p.InitLen == nil || p.InitLen.Max > 1200 || p.InitLen.Min < 900 {
-		t.Fatalf("default init_len = %+v, want inside [900, 1200]", p.InitLen)
+	if p.InitLen == nil || p.InitLen.Max > 1000 || p.InitLen.Min < 600 {
+		t.Fatalf("default init_len = %+v, want inside [600, 1000]", p.InitLen)
 	}
 	bad := *p
 	bad.InitLen = &shape.Range{Min: 1280, Max: 1420}
@@ -258,6 +258,23 @@ func TestPath1172Passes(t *testing.T) {
 		}
 		if !e.toServer && e.size > 1172 {
 			t.Fatalf("the responder sent %d bytes, over the 1172-byte path", e.size)
+		}
+	}
+}
+
+// The live lab's D10 flags a long random UDP stream whose first datagram is 1001 bytes or more
+// (it is taken for a QUIC Initial that is not one). The default profile therefore keeps the first
+// datagram of a flow at 1000 bytes or less.
+func TestDefaultFlightAtMost1000(t *testing.T) {
+	for i := 0; i < 6; i++ {
+		ev, err := dialThroughTap(t, 0, 0)
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		for _, n := range beforeAnswer(ev) {
+			if n > 1000 {
+				t.Fatalf("flow %d: a datagram of %d bytes before the first answer, want <= 1000", i, n)
+			}
 		}
 	}
 }
