@@ -430,10 +430,24 @@ with "this build has no release keys". Both become usable when a signed release 
 block in place; the trust root, the `min_version` rule and key rotation are described in
 [Release trust](release-trust.md).
 
-When that release exists, the sequence will be: download `install.sh` from the release page, compare
-`sha256sum install.sh` with the value published on the site and in the README of the repository, and
-only then run it as root with `ECHOFOG_RELEASE_URL` pointing at the release folder. The script checks
-the signatures of `release.txt` (at least two of the three release keys), compares the size and
-SHA-256 of the binary with that record, and starts the setup only after that. Never pipe a download
-into a shell. Until then, Docker is the working path, and this is also why section 7 is the one to
-follow.
+When a signed release exists, the working order is this:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://example.org/install.sh
+sha256sum install.sh               # compare the value with the site and the README
+sh install.sh --fingerprint        # the same whole-file SHA-256, then the fingerprint of the key block
+ECHOFOG_RELEASE_URL=https://example.org/releases/v2 sh install.sh --preset relay --advertise 203.0.113.10
+systemctl status echofog-node      # the unit is written; --start also enables and runs the service
+```
+
+The first value that `--fingerprint` prints is the SHA-256 of the whole file, the one published on
+the site and in the README; the second line is the fingerprint of the key block, which
+[Release trust](release-trust.md) describes together with the `min_version` rule. The command is a
+cross-check and not a proof: a changed script can print anything, so the value to compare is the one
+from the site and the README. Run the installer as root: it creates the service user, the data
+folder and the systemd unit, and `--start` also enables and starts the service. A rollback to an
+older version needs `--allow-rollback`, and only down to the signed `min_version`; below it, never.
+The script checks the signatures of `release.txt` (at least two of the three release keys) and
+compares the size and SHA-256 of the binary with that record; the setup starts only after that. Never
+pipe a download into a shell. Until then, Docker is the working path, and this is also why section 7
+is the one to follow.
