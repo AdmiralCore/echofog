@@ -15,9 +15,10 @@ own. See [How it works](how-it-works.md).
 
 ## Is it free?
 
-Yes. Chats, groups, voice rooms, calls, streams and files of any size are free, with no subscription
-and no account. In 0.3.0 the VPN is free too: exits are shared by link, and there are no payments in
-the app. There is no EchoFog token.
+Yes. Chats, groups, voice rooms, calls, streams and files up to 64 GiB are free, with no subscription
+and no account. In 0.3.0 v2 exits are free too: they are shared by link, and 0.3.0 does not sell v2
+traffic. The app still carries the older v1 wallet and TON payments; the vault contract is on testnet
+and unaudited, and none of it pays for v2 traffic. There is no EchoFog token.
 
 ## Who can read my messages?
 
@@ -116,23 +117,31 @@ Every message in it is signed by its author, so the file cannot be altered on th
 
 ## What does the app keep on my computer?
 
-- **The database** (messages, contacts, groups, keys, settings) is encrypted with a key unlocked by your
+- **The database** (messages, contacts, groups, keys) is encrypted with a key unlocked by your
   password or recovery phrase.
+- **Connection settings** live in `ui_settings.json` next to the database as ordinary JSON (file mode
+  0600): anonymous mode, the proxy, pinned guard relays, entry nodes, the kill switch, the call route
+  and the protocol. The file holds no message text, names, keys or tokens, but it shows how the app
+  was set up and which relays and nodes it was told to use.
 - **Files you receive or save** are ordinary, unencrypted files in your download folder. The system
   viewer, previews, indexing, backups and anyone who can read the folder can see them. An encrypted media
   store is planned after 0.3.0.
 - **Logs and `crash.log`** are plain text with technical events. They do not contain message text,
-  file names, contact or group names, addresses, keys or tokens. Check a log before you share it anyway.
+  contact or group names, keys, tokens or the recovery phrase, and IP addresses are masked. A rare
+  storage or group error path can still write a full device or group ID, and a failed connection can
+  leave its host name. Check a log before you share it anyway.
 - **Emergency lock** erases the decrypted keys from memory, stops the node and the VPN and closes the
   app. It is a lock, not a wipe: what is already on disk stays, and the profile opens again with your
   password.
 - **Screenshots and screen recording** are not blocked by the app.
-- There is no analytics and no crash reporting. Nothing leaves your computer unless you send it.
+- There is no analytics and no automatic crash reporting: a crash report is built only when you open
+  it, and you post it yourself.
 
 ## Where is the VPN market, payment in TON, the wallet?
 
-Not in 0.3.0. Version 0.3.0 is the first release on protocol v2, and payments, the exit market and
-operator clusters come in later updates. Until then exits are free and shared by link.
+Not for v2 in 0.3.0. The v2 exit market, paid v2 exits and operator clusters come in later updates.
+Until then v2 exits are free and shared by link. The Wallet screen is the older v1 wallet for TON; the
+vault contract is on testnet and unaudited, and the wallet does not pay for v2 traffic.
 
 ## The app closes right after I type my password
 

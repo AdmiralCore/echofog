@@ -19,8 +19,12 @@ server.
 
 ## 2. Install with Docker
 
-The image is built from `deploy/v2/Dockerfile` and runs as an unprivileged user with a read-only file
-system and no capabilities.
+Run these commands from the `echofog-core-oss` folder of the repository. The compose file runs the
+published `ghcr.io/admiralcore/echofog-node:v2-dev` image, built by the node-image workflow from
+`deploy/v2/Dockerfile`; the `dev` and `latest` tags start the v1 node (`echofog-node run`) and are not
+used here. Pin a `sha-<commit>` tag when you want updates only on purpose. The container runs as an
+unprivileged user with a read-only file system and no capabilities; the profile is kept in the
+`echofog-v2-data` volume at `/data`.
 
 ```
 cp deploy/v2/.env.example deploy/v2/.env      # then edit it: set ECHOFOG_ADVERTISE_ADDR=203.0.113.10
@@ -137,7 +141,14 @@ published.
 version, asks before installing it and never goes back to an older one. With Docker the image is
 updated by changing the tag and restarting the container.
 
-## 8. Troubleshooting
+## 8. Removing the node
+
+Without Docker, `echofog-node v2 uninstall --data /var/lib/echofog` stops the service and removes its
+systemd unit and the firewall rules it added. The profile is kept; add `--purge` and confirm to delete
+it too. With Docker, `docker compose -f deploy/v2/docker-compose.yml down` removes the container; the
+profile stays in the `echofog-v2-data` volume until you remove the volume.
+
+## 9. Troubleshooting
 
 - `doctor` reports the port in use: another process holds the UDP port; stop it or choose another port.
 - No peers connect: the firewall or the host's panel blocks the UDP port.

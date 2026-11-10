@@ -24,10 +24,11 @@ share your own.
 - **Talk.** Direct chats with replies, threads, reactions, edits, pins, mentions and saved messages.
   Voice rooms you join with one click, calls one to one and in groups, and screen streams up to 4K60
   that travel over trees of the viewers' own uplinks, so a stream reaches many people without a server.
-- **Files and voice messages.** Any size, resumed after a break, delivered into the group, channel and
-  thread they were sent to.
+- **Files and voice messages.** Files up to 64 GiB by default, resumed after a break, delivered into
+  the group, channel and thread they were sent to.
 - **Offline delivery.** A message to someone who is offline waits in an encrypted mailbox for up to
-  7 days. The app shows honest states: *waiting for connection*, *in mailbox*, *delivered*, *expired*.
+  7 days. The app shows the state of a message: *waiting for delivery*, *waiting at a relay*,
+  *delivered*.
 - **A VPN when you need one.** Paste a link to an exit and go online through it, as a local SOCKS5 proxy
   or for the whole computer with a kill switch (Windows and Linux). Turn your own computer into an exit
   for the people you choose.
@@ -86,8 +87,9 @@ From our lab, not from a real national censor:
 | Relay of a voice room cut off without warning | listeners back in 0.7 s |
 
 Not proven yet, and therefore not promised: that the TCP disguise is indistinguishable from a browser
-(record sizes and timings still differ), anything about China or Iran, and behaviour in real mobile
-networks of Russia. These are the next lab and field tasks.
+(record sizes and timings still differ, and in our lab the ws2 TLS fingerprint stands out), anything
+about China or Iran, and behaviour in real mobile networks of Russia. These are the next lab and field
+tasks.
 
 ## Repository layout
 
@@ -110,10 +112,12 @@ Server node:
 ```bash
 cd echofog-core-oss
 make build                         # -> bin/echofog-node
-./bin/echofog-node v2 setup        # full-screen installer; with --yes and flags it runs unattended
+./bin/echofog-node v2 init         # creates the node and its settings; no release keys needed
 ```
 
-To install a released node on a server, use the signed `install.sh` and check it first:
+The full-screen `v2 setup` and `v2 update` are part of a release build: they verify a signed release
+manifest and fail closed without the release keys compiled in. To install a released node on a
+server, use the signed `install.sh`, which starts `v2 setup` after its own checks:
 [VPS with protocol v2](docs/deploy-vps-v2.md).
 
 Desktop app:

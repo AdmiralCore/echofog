@@ -33,11 +33,13 @@ contacts' view of you, stays the same; the new computer is a new device of the s
 
 ## Contacts
 
-Your link is under your name in the profile card. Send it to someone through any channel; when they
-open it in EchoFog (or paste it with **Ctrl+L**), they send you a request, and you accept it. Links also
-come in an https form that messengers make tappable: the page opens the app or offers the download.
+Your link is in **My contact** (the QR button above the chat list). Send it to someone through any
+channel; when they open it in EchoFog (or paste it with **Ctrl+L**), they send you a request, and you
+accept it. Links also come in an https form that messengers make tappable: the page opens the app or
+offers the download.
 
-A link can have a term, and a person who is not your contact cannot write to you until you accept them.
+A link can have a term. Someone who is not your contact can write to you, but the chat is marked as a
+request, and calls and files wait until you accept the request.
 
 ## Spaces, channels and voice rooms
 
@@ -46,16 +48,16 @@ messages*), below it your spaces, and **+** to create a space or join one by lin
 
 - **Create a space**: **+** → *Create*. Add text channels and voice rooms, group them in categories, and
   set roles and per-channel permissions in the channel settings (the gear next to a channel).
-- **Invite people**: the space menu → *Invite*. An invitation can have a term and can require your
-  approval for each request.
+- **Invite people**: the space's *Info* window → *Invite*. An invitation can have a term and can
+  require your approval for each request.
 - **Moderate**: slow mode and "only admins write" per channel, removing and banning members, the log of
   what moderators did.
 - **Voice rooms**: one click on a room joins it. While you are in a room you can open any text channel;
-  the call shrinks to a mini window, and *Back to call* brings it back.
+  the call shrinks to a mini window, and *Open call* brings it back.
 - **Hide the column** of channels with **Ctrl+B** when you need room for the chat or the stream.
 
-Replies, threads, reactions, edits, pins, mentions (`@name`, `@all`), notifications per channel and
-muting for a term work in every chat.
+Replies, threads, reactions, edits, pins and mentions (`@name`, `@all`) work in every chat; a chat can
+be muted.
 
 ## Calls and screen streams
 
@@ -75,7 +77,7 @@ Files you receive are saved as ordinary, **unencrypted** files in your download 
 for sensitive files; an encrypted media store comes after 0.3.0.
 
 When someone is offline, a message waits in an encrypted mailbox for up to 7 days. Its state is shown
-honestly: *waiting for connection*, *in mailbox*, *delivered* or *expired*.
+as *waiting for delivery*, *waiting at a relay* or *delivered*.
 
 ## The VPN
 
@@ -98,9 +100,9 @@ protection* on the VPN screen. Details: [Windows](kill-switch-windows.md), [Linu
 You can let chosen people go online through your computer. **Their traffic leaves from your IP address**,
 and you answer for it, so read [the FAQ](faq.md#what-happens-if-i-share-my-connection-as-an-exit) first.
 
-On the VPN screen, open *Share your connection*:
+On the VPN screen, open the *Sharing* tab:
 
-- by default only the contacts you pick can connect, and each new request waits for your confirmation;
+- by default only the people you confirm can connect, and each new request waits for your answer;
 - *Anyone with the link* is a separate switch with a term, and you can revoke it at any time;
 - the screen shows who is connected, and you can disconnect anyone;
 - sharing turns off after every restart.
@@ -109,14 +111,14 @@ On the VPN screen, open *Share your connection*:
 
 *Settings* → *Tor and proxy* sends the app's own traffic through Tor or another SOCKS5 proxy, so the
 EchoFog network does not see your address. In this mode the app does not punch through routers and does
-not announce your address; calls go through relays. It is slower, and it only helps if Tor or the proxy
-is reachable from your network.
+not announce your address; calls go through relays by default (*Direct* would show your address). It is
+slower, and it only helps if Tor or the proxy is reachable from your network.
 
 ## When something does not work
 
 - **No connection**: check *Settings* → *Network* → *Entry nodes* (*Check* shows which entries answer), or
   open an invitation link from someone already in the network.
-- **A message hangs in "waiting for connection"**: neither side can reach the other right now and no
+- **A message hangs in "waiting for delivery"**: neither side can reach the other right now and no
   mailbox has it yet; it is delivered when one of you is online with a path.
 - **Connection report**: *Settings* → *Diagnostics* → *Connection report* gathers what the app knows about
   its connection, without addresses or IDs, ready to post in an issue.
