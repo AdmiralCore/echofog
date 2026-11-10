@@ -150,18 +150,18 @@
   .modes { display: flex; gap: 8px; flex-wrap: wrap; }
   .mode {
     flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
-    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface-2); white-space: normal; height: auto; font-weight: var(--fw-regular); color: var(--text);
     cursor: pointer; text-align: left;
   }
-  .mode.sel { border-color: var(--accent); background: var(--accent-weak, var(--surface)); }
+  .mode.sel { border-color: var(--accent); background: var(--accent-soft); }
   .mode .name { font-weight: 600; }
   .status { display: flex; align-items: center; gap: 8px; }
   .guards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .guards li { display: flex; align-items: center; gap: 8px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot.ok { background: #38c172; }
-  .dot.wait { background: #e0a106; }
-  .note { border-top: 1px solid var(--line); padding-top: 8px; }
+  .dot.ok { background: var(--ok); }
+  .dot.wait { background: var(--warn); }
+  .note { border-top: 1px solid var(--border-strong); padding-top: 8px; }
   .pin h3 { margin: 0 0 2px; font-weight: 600; }
   .pinned { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .pinned li { display: flex; align-items: center; gap: 8px; }

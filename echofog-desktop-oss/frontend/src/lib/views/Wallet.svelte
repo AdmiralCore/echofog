@@ -3,6 +3,12 @@
   import QRCode from 'qrcode';
   import { App, errText, copy, openURL } from '../api.js';
   import { amount, when, short } from '../format.js';
+  import './skin.css';
+  import Button from '../components/ui/Button.svelte';
+  import IconButton from '../components/ui/IconButton.svelte';
+  import Input from '../components/ui/Input.svelte';
+  import Tabs from '../components/ui/Tabs.svelte';
+  import Badge from '../components/ui/Badge.svelte';
   import Icon from '../components/ui/Icon.svelte';
   import VaultCard from '../components/VaultCard.svelte';
   import TestnetNotice from '../components/TestnetNotice.svelte';
@@ -105,219 +111,205 @@
   }
 </script>
 
-<div class="page">
-  <div class="stack">
-    <div class="page-head">
+<div class="page skin">
+  <div class="wl">
+    <header class="head">
       <div class="grow">
-        <h1>{$t('wallet.title')} {#if testnet}<span class="chip warn">testnet</span>{/if}</h1>
+        <h1>{$t('wallet.title')} {#if testnet}<Badge variant="warn">testnet</Badge>{/if}</h1>
         <p class="muted small">{$t('wallet.subtitle')}</p>
       </div>
-    </div>
+    </header>
 
     <TestnetNotice />
+    {#if netError}<p class="notice err small" role="alert"><Icon name="error" size={15} /> {netError}</p>{/if}
 
-    {#if netError}<p class="error small">{netError}</p>{/if}
+    <p class="notice quiet small" role="note"><Icon name="info" size={15} /> <span>{$t('wallet.note')} {$t('wallet.noteFee')} {#if !onRamp}{$t('wallet.noteGetUsdt')}{/if}</span></p>
 
-    <div class="hero">
-      <div class="hero-main">
-        <div class="eyebrow light">{$t('wallet.balance')}</div>
-        <div class="balances">
-          <div class="bal">
-            <span class="big">{balance ? amount(balance.usdt || 0, $lang) : '…'}</span><span class="cur">USDT</span>
+    <div class="cols">
+      <div class="col">
+        <section class="balance">
+          <div class="b-main">
+            <div class="eyebrow">{$t('wallet.balance')}</div>
+            <div class="bal">
+              <span class="big">{balance ? amount(balance.usdt || 0, $lang) : '…'}</span><span class="cur">USDT</span>
+            </div>
+            <div class="bal second">
+              <span class="mid">{balance ? amount(balance.ton, $lang) : '…'}</span><span class="cur">TON</span>
+              {#if balance?.usdRate}<span class="usd">≈ ${(Number(balance.ton) * balance.usdRate).toFixed(2)}</span>{/if}
+            </div>
+            <div class="addr"><span class="mono">{wallet?.address || '…'}</span></div>
+            <div class="row wrap">
+              <Button size="sm" icon={copied ? 'check' : 'copy'} on:click={copyAddress} disabled={!wallet}>{copied ? $t('common.copied') : $t('wallet.copyAddress')}</Button>
+              {#if onRamp}<Button size="sm" icon="coin" on:click={() => openURL(onRamp)}>{$t('wallet.buyCard')}</Button>{/if}
+            </div>
           </div>
-          <div class="bal second">
-            <span class="mid">{balance ? amount(balance.ton, $lang) : '…'}</span><span class="cur">TON</span>
-            {#if balance?.usdRate}<span class="usd">≈ ${(Number(balance.ton) * balance.usdRate).toFixed(2)}</span>{/if}
+          {#if qr}<img class="qr" src={qr} alt={$t('wallet.qrAlt')} />{/if}
+        </section>
+
+        <VaultCard {explorer} balanceTon={balance ? balance.ton : null} on:changed={refresh} />
+
+        <section class="card stack">
+          <div class="card-head">
+            <span class="ico"><Icon name="send" size={18} /></span>
+            <div class="grow"><h2>{$t('wallet.send')}</h2><p class="small muted">{$t('wallet.sendHint')}</p></div>
           </div>
-        </div>
-        <div class="addr">
-          <span class="mono">{wallet?.address || '…'}</span>
-        </div>
-        <div class="row wrap">
-          <button class="glass with-icon" on:click={copyAddress} disabled={!wallet}><Icon name={copied ? 'check' : 'copy'} size={15} />{copied ? $t('common.copied') : $t('wallet.copyAddress')}</button>
-          {#if onRamp}<button class="glass with-icon" on:click={() => openURL(onRamp)}><Icon name="coin" size={15} /> {$t('wallet.buyCard')}</button>{/if}
-        </div>
-      </div>
-      {#if qr}<img class="qr" src={qr} alt={$t('wallet.qrAlt')} />{/if}
-    </div>
-
-    <p class="note">
-      {$t('wallet.note')}
-      {$t('wallet.noteFee')}
-      {#if !onRamp}{$t('wallet.noteGetUsdt')}{/if}
-    </p>
-
-    <VaultCard {explorer} balanceTon={balance ? balance.ton : null} on:changed={refresh} />
-
-    <div class="card stack">
-      <div class="card-head">
-        <span class="ico"><Icon name="send" size={18} /></span>
-        <div class="grow"><h2>{$t('wallet.send')}</h2><p class="small muted">{$t('wallet.sendHint')}</p></div>
-      </div>
-      {#key step}
-      <div class="stack step">
-      {#if step === 'form'}
-        <div class="seg asset-seg">
-          {#each ['USDT', 'TON'] as a}
-            <button class:active={send.asset === a} on:click={() => (send.asset = a)}>{a}</button>
-          {/each}
-        </div>
-        <label>{$t('wallet.recipient')}<input bind:value={send.to} spellcheck="false" placeholder="UQ…" /></label>
-        <div class="row wrap">
-          <label class="amt">{$t('wallet.amount')}
-            <span class="amt-in"><input bind:value={send.amount} placeholder="0.00" inputmode="decimal" /><button class="ghost small max" on:click={() => (send.amount = send.asset === 'TON' ? Math.max(0, available - 0.05).toFixed(4) : String(available))} disabled={!balance}>{$t('wallet.max')}</button></span>
-          </label>
-          <label class="grow">{$t('wallet.comment')}<input bind:value={send.comment} /></label>
-        </div>
-        <div><button class="primary" on:click={review}>{$t('wallet.review')}</button></div>
-      {:else if step === 'review' || step === 'sending'}
-        <div class="review">
-          <div class="r-amt">{send.amount} <span>{send.asset}</span></div>
-          <div class="small muted">{$t('wallet.to')}</div>
-          <div class="mono">{send.to}</div>
-          {#if send.comment}<div class="small muted">“{send.comment}”</div>{/if}
-        </div>
-        <div class="row">
-          <button class="primary" on:click={confirmSend} disabled={step === 'sending'}>{#if step === 'sending'}<span class="spinner"></span> {$t('wallet.sending')}{:else}{$t('wallet.confirmSend')}{/if}</button>
-          <button on:click={() => (step = 'form')} disabled={step === 'sending'}>{$t('common.back')}</button>
-        </div>
-      {:else}
-        <div class="done">
-          <span class="done-ic"><Icon name="check" size={26} stroke={2.6} /></span>
-          <div>
-            <p class="ok"><b>{$t('wallet.sentBold')}</b> {$t('wallet.sentAfter')}</p>
-            <p class="small"><a href={`${explorer}/transaction/${sentHash}`} on:click|preventDefault={() => openURL(`${explorer}/transaction/${sentHash}`)}>{$t('wallet.viewExplorer')}</a></p>
-          </div>
-        </div>
-        <div><button on:click={() => (step = 'form')}>{$t('wallet.newTransfer')}</button></div>
-      {/if}
-      </div>
-      {/key}
-      {#if sendError}<p class="error small">{sendError}</p>{/if}
-    </div>
-
-    <div class="card stack">
-      <div class="card-head">
-        <span class="ico"><Icon name="refresh" size={18} /></span>
-        <div class="grow"><h2>{$t('wallet.history')}</h2></div>
-      </div>
-      {#if history.length}
-        <div class="txs">
-          {#each history as tx (tx.hash)}
-            <div class="tx" class:failed={tx.failed}>
-              <span class="tx-ic" class:in={tx.incoming}><Icon name={tx.incoming ? 'download' : 'upload'} size={16} /></span>
-              <div class="grow tx-body">
-                <div class="row">
-                  <span class="grow mono cp">{short(tx.counterparty)}</span>
-                  <span class="tx-amt" class:in={tx.incoming}>{tx.incoming ? '+' : '−'}{amount(tx.ton, $lang)} {tx.asset || 'TON'}</span>
-                </div>
-                <div class="row small">
-                  <span class="grow faint ellip">{tx.comment || (tx.incoming ? $t('wallet.received') : $t('wallet.sent'))}{tx.failed ? ' · ' + $t('wallet.failed') : ''}</span>
-                  <span class="faint">{when(tx.time, $lang)}</span>
-                </div>
+          {#key step}
+          <div class="stack step">
+          {#if step === 'form'}
+            <Tabs variant="segment" label={$t('wallet.send')} value={send.asset} on:change={(e) => (send.asset = e.detail)} items={[{ id: 'USDT', label: 'USDT' }, { id: 'TON', label: 'TON' }]} />
+            <Input label={$t('wallet.recipient')} bind:value={send.to} spellcheck="false" placeholder="UQ…" />
+            <div class="row wrap amt-row">
+              <div class="amt">
+                <Input label={$t('wallet.amount')} bind:value={send.amount} placeholder="0.00" inputmode="decimal">
+                  <Button slot="end" variant="ghost" size="sm" className="max" on:click={() => (send.amount = send.asset === 'TON' ? Math.max(0, available - 0.05).toFixed(4) : String(available))} disabled={!balance}>{$t('wallet.max')}</Button>
+                </Input>
+              </div>
+              <div class="grow"><Input label={$t('wallet.comment')} bind:value={send.comment} /></div>
+            </div>
+            <div><Button variant="primary" on:click={review}>{$t('wallet.review')}</Button></div>
+          {:else if step === 'review' || step === 'sending'}
+            <div class="review">
+              <div class="r-amt">{send.amount} <span>{send.asset}</span></div>
+              <div class="small muted">{$t('wallet.to')}</div>
+              <div class="mono">{send.to}</div>
+              {#if send.comment}<div class="small muted">“{send.comment}”</div>{/if}
+            </div>
+            <div class="row">
+              <Button variant="primary" loading={step === 'sending'} on:click={confirmSend}>{step === 'sending' ? $t('wallet.sending') : $t('wallet.confirmSend')}</Button>
+              <Button on:click={() => (step = 'form')} disabled={step === 'sending'}>{$t('common.back')}</Button>
+            </div>
+          {:else}
+            <div class="done">
+              <span class="done-ic"><Icon name="check" size={22} stroke={2.2} /></span>
+              <div>
+                <p class="ok"><b>{$t('wallet.sentBold')}</b> {$t('wallet.sentAfter')}</p>
+                <p class="small"><a href={`${explorer}/transaction/${sentHash}`} on:click|preventDefault={() => openURL(`${explorer}/transaction/${sentHash}`)}>{$t('wallet.viewExplorer')}</a></p>
               </div>
             </div>
-          {/each}
-        </div>
-      {:else}
-        <p class="small muted">{$t('wallet.noTx')}</p>
-      {/if}
-    </div>
-
-    {#if support.available}
-      <div class="card stack">
-        <div class="card-head">
-          <span class="ico ok"><Icon name="zap" size={18} /></span>
-          <div class="grow">
-            <h2>{$t('wallet.support')}</h2>
-            <p class="small muted">{$t('wallet.supportHint')}</p>
+            <div><Button on:click={() => (step = 'form')}>{$t('wallet.newTransfer')}</Button></div>
+          {/if}
           </div>
-        </div>
-        <div class="seg">
-          {#each [0, 5, 10] as p}
-            <button class:active={support.percent === p} on:click={() => setShare(p)}>{p === 0 ? $t('wallet.off') : p + '%'}</button>
-          {/each}
-        </div>
-        {#if Number(support.pendingUsdt) > 0 || Number(support.pendingTon) > 0}
-          <p class="small faint">{$t('wallet.pending', { usdt: support.pendingUsdt, ton: support.pendingTon })}</p>
-        {/if}
+          {/key}
+          {#if sendError}<p class="error small" role="alert">{sendError}</p>{/if}
+        </section>
       </div>
-    {/if}
 
-    <details class="card">
-      <summary class="muted">{$t('wallet.phrase')}</summary>
-      <div class="stack" style="margin-top: 14px">
-        {#if words.length}
-          <ol class="words">{#each words as w, i}<li><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}</ol>
-          <div><button on:click={() => (words = [])}>{$t('common.hide')}</button></div>
-        {:else}
-          <p class="small muted">{$t('wallet.phraseHint')}</p>
-          <form class="row" on:submit|preventDefault={exportPhrase}>
-            <input type="password" placeholder={$t('wallet.appPassword')} bind:value={exportPw} />
-            <button type="submit" disabled={!exportPw}>{$t('common.show')}</button>
-          </form>
-          {#if exportError}<p class="error small">{exportError}</p>{/if}
+      <div class="col">
+        <section class="card stack">
+          <div class="card-head">
+            <span class="ico"><Icon name="clock" size={18} /></span>
+            <div class="grow"><h2>{$t('wallet.history')}</h2></div>
+          </div>
+          {#if history.length}
+            <div class="txs">
+              {#each history as tx (tx.hash)}
+                <div class="tx" class:failed={tx.failed}>
+                  <span class="tx-ic" class:in={tx.incoming}><Icon name={tx.incoming ? 'download' : 'upload'} size={16} /></span>
+                  <div class="grow tx-body">
+                    <div class="row">
+                      <span class="grow mono cp">{short(tx.counterparty)}</span>
+                      <span class="tx-amt" class:in={tx.incoming}>{tx.incoming ? '+' : '−'}{amount(tx.ton, $lang)} {tx.asset || 'TON'}</span>
+                    </div>
+                    <div class="row small">
+                      <span class="grow faint ellip">{tx.comment || (tx.incoming ? $t('wallet.received') : $t('wallet.sent'))}{tx.failed ? ' · ' + $t('wallet.failed') : ''}</span>
+                      <span class="faint">{when(tx.time, $lang)}</span>
+                    </div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="small muted">{$t('wallet.noTx')}</p>
+          {/if}
+        </section>
+
+        {#if support.available}
+          <section class="card stack">
+            <div class="card-head">
+              <span class="ico ok"><Icon name="zap" size={18} /></span>
+              <div class="grow">
+                <h2>{$t('wallet.support')}</h2>
+                <p class="small muted">{$t('wallet.supportHint')}</p>
+              </div>
+            </div>
+            <Tabs variant="segment" label={$t('wallet.support')} value={support.percent} on:change={(e) => setShare(e.detail)}
+              items={[0, 5, 10].map((p) => ({ id: p, label: p === 0 ? $t('wallet.off') : p + '%' }))} />
+            {#if Number(support.pendingUsdt) > 0 || Number(support.pendingTon) > 0}
+              <p class="small faint">{$t('wallet.pending', { usdt: support.pendingUsdt, ton: support.pendingTon })}</p>
+            {/if}
+          </section>
         {/if}
+
+        <details class="card">
+          <summary class="muted">{$t('wallet.phrase')}</summary>
+          <div class="stack" style="margin-top: 14px">
+            {#if words.length}
+              <ol class="words">{#each words as w, i}<li><span class="n">{i + 1}</span><span class="mono">{w}</span></li>{/each}</ol>
+              <div><Button on:click={() => (words = [])}>{$t('common.hide')}</Button></div>
+            {:else}
+              <p class="small muted">{$t('wallet.phraseHint')}</p>
+              <form class="row end" on:submit|preventDefault={exportPhrase}>
+                <div class="grow"><Input type="password" placeholder={$t('wallet.appPassword')} aria-label={$t('wallet.appPassword')} bind:value={exportPw} /></div>
+                <Button type="submit" disabled={!exportPw}>{$t('common.show')}</Button>
+              </form>
+              {#if exportError}<p class="error small" role="alert">{exportError}</p>{/if}
+            {/if}
+          </div>
+        </details>
       </div>
-    </details>
+    </div>
   </div>
 </div>
 
 <style>
-  .hero {
-    position: relative; overflow: hidden; display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
-    padding: 24px; border-radius: var(--radius-xl); color: #fff;
-    background:
-      radial-gradient(420px 260px at 100% 0%, rgba(255, 255, 255, 0.18), transparent 60%),
-      linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: var(--glow), var(--shadow);
-  }
-  .hero::after {
-    content: ''; position: absolute; width: 260px; height: 260px; right: -80px; bottom: -140px; border-radius: 50%;
-    border: 40px solid rgba(255, 255, 255, 0.07); pointer-events: none;
-  }
-  .hero-main { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 12px; position: relative; z-index: 1; }
-  .eyebrow.light { color: rgba(255, 255, 255, 0.7); }
-  .balances { display: flex; flex-direction: column; gap: 2px; }
-  .bal { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .big { font-size: clamp(30px, 5vw, 40px); font-weight: 750; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
-  .mid { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .cur { font-weight: 600; opacity: 0.8; }
-  .usd { font-size: 13px; opacity: 0.7; }
-  .addr { padding: 8px 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.16); max-width: 520px; }
-  .addr .mono { color: rgba(255, 255, 255, 0.92); }
-  button.glass { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.2); color: #fff; backdrop-filter: blur(6px); }
-  button.glass:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); border-color: rgba(255, 255, 255, 0.3); }
-  .qr { width: 136px; height: 136px; border-radius: 16px; padding: 8px; background: #fff; position: relative; z-index: 1; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); }
+  .page { height: 100%; overflow-y: auto; padding: var(--sp-6) var(--sp-6) var(--sp-12); }
+  .wl { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-4); }
+  .head { display: flex; align-items: flex-end; gap: var(--sp-3); }
+  .head h1 { display: flex; align-items: center; gap: var(--sp-2); }
+  .cols { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+  .col { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+  @media (max-width: 880px) { .cols { grid-template-columns: minmax(0, 1fr); } }
 
-  .step { animation: fade-up 0.3s var(--ease); }
-  .asset-seg { min-width: 200px; }
+  .notice { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); line-height: 1.45; }
+  .notice :global(svg) { flex: none; margin-top: 2px; }
+  .notice.quiet { background: var(--surface-2); color: var(--muted); }
+  .notice.err { background: var(--danger-soft); color: var(--danger-fg); }
+
+  .balance { display: flex; gap: var(--sp-5); align-items: center; flex-wrap: wrap; padding: var(--sp-5); border-radius: var(--r-xl); background: var(--surface-1); border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+  .b-main { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: var(--sp-2); }
+  .bal { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+  .big { font-size: 32px; line-height: 1.1; font-weight: var(--fw-semibold); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .mid { font-size: var(--fs-lg); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+  .cur { font-weight: var(--fw-medium); color: var(--muted); }
+  .usd { font-size: var(--fs-sm); color: var(--faint); }
+  .addr { padding: 6px 10px; border-radius: var(--r-md); background: var(--surface-2); }
+  .qr { width: 120px; height: 120px; border-radius: var(--r-lg); padding: 6px; background: #fff; flex: none; }
+
+  .step { animation: fade-up 0.2s var(--ease); }
   .amt { width: 200px; }
-  .amt-in { position: relative; display: block; margin-top: 6px; }
-  .amt-in input { margin: 0; padding-right: 56px; font-variant-numeric: tabular-nums; }
-  .max { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 3px 9px; font-size: 11.5px; color: var(--accent); }
-  .max:active:not(:disabled) { transform: translateY(-50%) scale(0.95); }
-  .review { padding: 16px; border-radius: 16px; background: var(--raised); display: flex; flex-direction: column; gap: 4px; }
-  .r-amt { font-size: 26px; font-weight: 720; letter-spacing: -0.02em; }
-  .r-amt span { font-size: 15px; color: var(--muted); font-weight: 600; }
-  .done { display: flex; align-items: center; gap: 14px; }
-  .done-ic { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); animation: pop 0.45s var(--spring); }
+  .amt-row { align-items: flex-start; }
+  :global(.max) { color: var(--accent-fg); }
+  .review { padding: var(--sp-4); border-radius: var(--r-lg); background: var(--surface-2); display: flex; flex-direction: column; gap: 4px; }
+  .r-amt { font-size: 24px; font-weight: var(--fw-semibold); letter-spacing: -0.02em; }
+  .r-amt span { font-size: var(--fs-md); color: var(--muted); font-weight: var(--fw-medium); }
+  .done { display: flex; align-items: center; gap: var(--sp-3); }
+  .done-ic { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); }
+  .end { align-items: flex-end; }
 
-  .txs { display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; }
-  .tx { display: flex; align-items: center; gap: 12px; padding: 9px 8px; border-radius: 12px; transition: background var(--dur); }
+  .txs { display: flex; flex-direction: column; margin: 0 -8px; }
+  .tx { display: flex; align-items: center; gap: var(--sp-3); padding: 8px; border-radius: var(--r-md); }
   .tx:hover { background: var(--hover); }
   .tx.failed { opacity: 0.5; }
-  .tx-ic { width: 36px; height: 36px; border-radius: 12px; flex: none; display: grid; place-items: center; background: var(--raised); color: var(--muted); }
+  .tx-ic { width: 32px; height: 32px; border-radius: var(--r-md); flex: none; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
   .tx-ic.in { background: var(--ok-soft); color: var(--ok); }
   .tx-body { display: flex; flex-direction: column; gap: 1px; }
-  .cp { font-size: 12.5px; word-break: normal; }
-  .tx-amt { font-weight: 650; font-variant-numeric: tabular-nums; }
-  .tx-amt.in { color: var(--ok); }
+  .cp { font-size: var(--fs-sm); word-break: normal; }
+  .tx-amt { font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; font-size: var(--fs-sm); }
+  .tx-amt.in { color: var(--ok-fg); }
   .ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .words { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
-  .words li { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 10px; background: var(--raised); }
-  .words .n { color: var(--faint); font-size: 11px; width: 16px; text-align: right; }
+  .words { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+  .words li { display: flex; gap: var(--sp-2); align-items: center; padding: 6px 10px; border-radius: var(--r-sm); background: var(--surface-2); }
+  .words .n { color: var(--faint); font-size: var(--fs-2xs); width: 16px; text-align: right; }
   .words .mono { word-break: normal; }
 </style>
-

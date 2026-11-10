@@ -9,6 +9,9 @@
   import { chats } from '../stores/chats.js';
   import { sendPaths } from '../stores/files.js';
   import Icon from './ui/Icon.svelte';
+  import Button from './ui/Button.svelte';
+  import Select from './ui/Select.svelte';
+  import Sheet from './ui/Sheet.svelte';
   import { t } from '../i18n/index.js';
 
   export let crash;
@@ -72,73 +75,43 @@
     }
     openURL(url);
   }
-
-  function portal(node) {
-    document.body.appendChild(node);
-    return { destroy: () => node.remove() };
-  }
 </script>
 
-<svelte:window on:keydown={(e) => e.key === 'Escape' && close()} />
-
-<div class="layer" use:portal>
-  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="backdrop" on:click={close}></div>
-  <div class="dialog" role="dialog" aria-label={$t('crash.title')}>
-    <header>
-      <div class="grow">
-        <h2>{$t('crash.title')}</h2>
-        <p class="small muted">{$t('crash.hint')}</p>
-      </div>
-      <button class="icon" title={$t('common.close')} aria-label={$t('common.close')} on:click={close}><Icon name="close" size={18} /></button>
-    </header>
-
-    <div class="reason">
-      <b class="mono">{crash.reason}</b>
-      {#if crash.where}<span class="mono small muted">{crash.where}</span>{/if}
-    </div>
-    <pre class="text mono">{text}</pre>
-    <p class="small warn"><Icon name="eye" size={14} /> {$t('crash.check')}</p>
-    {#if error}<p class="small error">{error}</p>{/if}
-
-    <div class="row btns">
-      <button class="with-icon" on:click={copyText}><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? $t('common.copied') : $t('common.copy')}</button>
-      <button class="with-icon" on:click={save}><Icon name="download" size={14} /> {$t('common.save')}</button>
-      <button class="primary with-icon" on:click={openIssue}><Icon name="external" size={14} /> {$t('crash.issue')}</button>
-    </div>
-    {#if savedPath}<p class="small muted">{$t('crash.saved', { path: savedPath })}</p>{/if}
-
-    {#if targets.length}
-      <div class="row send">
-        <select bind:value={chatId} aria-label={$t('crash.chat')}>
-          {#each targets as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
-        </select>
-        <button class="with-icon" on:click={send} disabled={sending || !chatId}><Icon name="send" size={14} /> {$t('crash.send')}</button>
-      </div>
-      {#if sentTo}<p class="small ok">{$t('crash.sent', { name: sentTo })}</p>{/if}
-    {/if}
+<Sheet title={$t('crash.title')} hint={$t('crash.hint')} width={720} on:close={close}>
+  <div class="reason">
+    <b class="mono">{crash.reason}</b>
+    {#if crash.where}<span class="mono small muted">{crash.where}</span>{/if}
   </div>
-</div>
+  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+  <pre class="text mono" tabindex="0" aria-label={$t('crash.title')}>{text}</pre>
+  <p class="small hint"><Icon name="eye" size={14} /> {$t('crash.check')}</p>
+  {#if error}<p class="small error" role="alert">{error}</p>{/if}
+  {#if savedPath}<p class="small muted" role="status">{$t('crash.saved', { path: savedPath })}</p>{/if}
+
+  {#if targets.length}
+    <div class="row send end">
+      <div class="grow"><Select label={$t('crash.chat')} bind:value={chatId} options={targets.map((c) => ({ value: c.id, label: c.name }))} /></div>
+      <Button icon="send" on:click={send} disabled={sending || !chatId}>{$t('crash.send')}</Button>
+    </div>
+    {#if sentTo}<p class="small ok" role="status">{$t('crash.sent', { name: sentTo })}</p>{/if}
+  {/if}
+
+  <svelte:fragment slot="footer">
+    <Button icon={copied ? 'check' : 'copy'} on:click={copyText}>{copied ? $t('common.copied') : $t('common.copy')}</Button>
+    <Button icon="download" on:click={save}>{$t('common.save')}</Button>
+    <span class="grow"></span>
+    <Button variant="primary" icon="external" on:click={openIssue}>{$t('crash.issue')}</Button>
+  </svelte:fragment>
+</Sheet>
 
 <style>
-  .layer { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 24px; }
-  .backdrop { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(6px); }
-  .dialog {
-    position: relative; width: min(760px, 100%); max-height: min(86vh, 900px); overflow: auto;
-    display: flex; flex-direction: column; gap: 12px; padding: 20px;
-    background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
-  }
-  header { display: flex; gap: 12px; align-items: flex-start; }
-  header p { margin-top: 4px; }
   .reason { display: flex; flex-direction: column; gap: 4px; word-break: break-word; }
   .text {
-    margin: 0; padding: 12px; overflow: auto; min-height: 120px; max-height: 40vh;
-    background: var(--raised); border-radius: 12px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    margin: 0; padding: var(--sp-3); overflow: auto; min-height: 120px; max-height: 36vh;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-lg);
+    font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
   }
-  .btns { gap: 8px; flex-wrap: wrap; }
-  .send { gap: 8px; }
-  .send select { flex: 1; min-width: 0; }
-  .ok { color: var(--color-success); }
-  .warn { color: #c98a00; display: flex; gap: 6px; align-items: flex-start; }
+  .hint { display: flex; gap: 6px; align-items: flex-start; color: var(--warn-fg); }
+  .hint :global(svg) { flex: none; margin-top: 2px; }
+  .send { gap: var(--sp-2); align-items: flex-end; }
 </style>

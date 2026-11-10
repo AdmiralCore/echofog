@@ -5,6 +5,10 @@
   import { App, errText, copy } from '../api.js';
   import { when } from '../format.js';
   import { t, lang } from '../i18n/index.js';
+  import Button from './ui/Button.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import Input from './ui/Input.svelte';
+  import Badge from './ui/Badge.svelte';
 
   export let access = null;
   export let enabled = false;
@@ -36,18 +40,18 @@
   <div class="sub stack" data-testid="exit-access">
     <div class="eyebrow">{$t('proxy.xa.link')}</div>
     {#if access.link}
-      <div class="row">
+      <div class="linkbox">
         <code class="mono grow small ellipsis">{access.link}</code>
-        <button class="tiny" on:click={() => copy(access.link)}>{$t('common.copy')}</button>
+        <IconButton icon="copy" size="sm" label={$t('common.copy')} on:click={() => copy(access.link)} />
       </div>
     {/if}
     <p class="small muted">{$t('proxy.xa.how')}</p>
 
     <div class="eyebrow">{$t('proxy.xa.connected')}</div>
     {#each access.clients || [] as c (c.id)}
-      <div class="row small">
+      <div class="line">
         <span class="grow">{c.label || (c.byLink ? $t('proxy.xa.byLink') : short(c.id))}</span>
-        <span class="faint">{$t('proxy.xa.streams', { n: c.streams })}</span>
+        <Badge>{$t('proxy.xa.streams', { n: c.streams })}</Badge>
       </div>
     {:else}
       <p class="small faint">{$t('proxy.xa.nobody')}</p>
@@ -57,12 +61,12 @@
       <div class="eyebrow">{$t('proxy.xa.waiting')}</div>
       <p class="small muted">{$t('proxy.xa.waitingHint')}</p>
       {#each access.waiting as w (w.id)}
-        <div class="row wrap small">
+        <div class="line wrap">
           <span class="mono">{short(w.id)}</span>
-          <span class="faint grow">{$t('proxy.xa.tried', { n: w.tries, when: when(w.last, $lang) })}</span>
-          <input class="name" placeholder={$t('proxy.xa.name')} bind:value={labels[w.id]} maxlength="64" />
-          <button class="primary tiny" disabled={!!busy} on:click={() => run('ok' + w.id, () => App.SharingApprove(w.id, labels[w.id] || ''))}>{$t('proxy.xa.approve')}</button>
-          <button class="tiny" disabled={!!busy} on:click={() => run('no' + w.id, () => App.SharingReject(w.id))}>{$t('proxy.xa.reject')}</button>
+          <span class="faint small grow">{$t('proxy.xa.tried', { n: w.tries, when: when(w.last, $lang) })}</span>
+          <div class="name"><Input size="sm" aria-label={$t('proxy.xa.name')} placeholder={$t('proxy.xa.name')} bind:value={labels[w.id]} maxlength="64" /></div>
+          <Button size="sm" variant="primary" disabled={!!busy} on:click={() => run('ok' + w.id, () => App.SharingApprove(w.id, labels[w.id] || ''))}>{$t('proxy.xa.approve')}</Button>
+          <Button size="sm" disabled={!!busy} on:click={() => run('no' + w.id, () => App.SharingReject(w.id))}>{$t('proxy.xa.reject')}</Button>
         </div>
       {/each}
     {/if}
@@ -70,31 +74,36 @@
     {#if (access.confirmed || []).length}
       <div class="eyebrow">{$t('proxy.xa.confirmed')}</div>
       {#each access.confirmed as k (k.id)}
-        <div class="row small">
+        <div class="line">
           <span class="grow">{k.label || short(k.id)}</span>
-          <button class="tiny" disabled={!!busy} on:click={() => run('rv' + k.id, () => App.SharingRevoke(k.id))}>{$t('proxy.xa.revoke')}</button>
+          <Button size="sm" disabled={!!busy} on:click={() => run('rv' + k.id, () => App.SharingRevoke(k.id))}>{$t('proxy.xa.revoke')}</Button>
         </div>
       {/each}
     {/if}
 
     <div class="eyebrow">{$t('proxy.xa.open')}</div>
     {#if open}
-      <div class="row small">
-        <span class="grow">{$t('proxy.xa.openUntil', { when: when(access.anyUntil, $lang) })}</span>
-        <button class="danger tiny" disabled={!!busy} on:click={() => run('close', () => App.SharingCloseOpen())}>{$t('proxy.xa.close')}</button>
+      <div class="line">
+        <span class="grow small">{$t('proxy.xa.openUntil', { when: when(access.anyUntil, $lang) })}</span>
+        <Button size="sm" variant="danger" disabled={!!busy} on:click={() => run('close', () => App.SharingCloseOpen())}>{$t('proxy.xa.close')}</Button>
       </div>
     {:else}
       <p class="small muted">{$t('proxy.xa.openHint')}</p>
-      <div class="row small">
-        <label class="grow">{$t('proxy.xa.minutes')}<input type="number" min="1" max="10080" bind:value={minutes} /></label>
-        <button class="tiny" disabled={!!busy} on:click={() => run('open', () => App.SharingOpenFor(Math.round(Number(minutes) || 0)))}>{$t('proxy.xa.openFor')}</button>
+      <div class="line wrap">
+        <div class="mins"><Input type="number" size="sm" label={$t('proxy.xa.minutes')} min="1" max="10080" bind:value={minutes} /></div>
+        <Button size="sm" disabled={!!busy} loading={busy === 'open'} on:click={() => run('open', () => App.SharingOpenFor(Math.round(Number(minutes) || 0)))}>{$t('proxy.xa.openFor')}</Button>
       </div>
     {/if}
-    {#if error}<p class="small error">{error}</p>{/if}
+    {#if error}<p class="small error" role="alert">{error}</p>{/if}
   </div>
 {/if}
 
 <style>
+  .line { display: flex; align-items: center; gap: var(--sp-2); min-height: 32px; font-size: var(--fs-sm); }
+  .line.wrap { flex-wrap: wrap; }
+  .line .grow { flex: 1 1 auto; min-width: 0; }
+  .linkbox { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-1); }
   .name { width: 9rem; }
+  .mins { width: 8rem; }
   .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

@@ -5,7 +5,8 @@
   import { App, errText, openURL } from '../api.js';
   import { classifyLink, fromWebLink, openLinkDialog } from '../links.js';
   import { messages, chatError, chatNote, activeGroupCalls, send, quotes, thread, fetchQuote, openThread, closeThread, editMessage, channels, activeChannel, mainChannel } from '../stores/chats.js';
-  import { isCallActive, startCall, peerInfo } from '../stores/call.store.js';
+  import { isCallActive, startCall, endCall, peerInfo } from '../stores/call.store.js';
+  import { ask } from '../stores/dialog.js';
   import { fileError, loadTransfers, pickAndSend, sendPaths } from '../stores/files.js';
   import { savedError } from '../stores/saved.js';
   import { nameOf } from '../stores/people.js';
@@ -23,16 +24,24 @@
   import ChatInfo from '../features/chat/ChatInfo.svelte';
   import ContactProfile from '../features/chat/ContactProfile.svelte';
   import ChannelBar from '../features/chat/ChannelBar.svelte';
+  import PanelHost from '../features/chat/PanelHost.svelte';
   import ThreadsList from '../features/chat/ThreadsList.svelte';
+  import MembersPanel from '../features/chat/MembersPanel.svelte';
   import { provideChat } from '../features/chat/context.js';
   import '../features/chat/chat.css';
 
   /** An open chat: it puts the parts of features/chat together and holds what they share. What I may
    *  do here and with each message comes from the core (conv.can, m.can). */
   export let conv;
-  /** back: show a back arrow (narrow window, the list is hidden); indent: leave room for the show-list button */
+  /** back: show a back arrow (narrow window, the list is hidden) */
   export let back = false;
-  export let indent = false;
+  /** which side column the head's button hides: 'personal' for a one-to-one chat in the list ('' none) */
+  export let panelButton = '';
+  /** stage: a call's stage is in the default slot, between the channels and the chat; chatOpen: the chat
+   *  beside it is shown; theatre: the stage takes everything (no channels, no chat) */
+  export let stage = false;
+  export let chatOpen = true;
+  export let theatre = false;
 
   const dispatch = createEventDispatcher();
   let list;
@@ -68,6 +77,15 @@
   let shownChannel = '';
   let info = false;
   let threadsOpen = false; // a space's list of threads
+  // a space's members by role, at the right of the chat; the choice is remembered
+  // without a choice made, the list is open when the chat is wide enough for it
+  let membersPref = null;
+  try { const v = localStorage.getItem('echofog.membersPanel'); membersPref = v === '1' ? true : v === '0' ? false : null; } catch (_) {}
+  $: membersOpen = membersPref ?? (!stage && screenW >= 1400);
+  function toggleMembers() {
+    membersPref = !membersOpen;
+    try { localStorage.setItem('echofog.membersPanel', membersPref ? '1' : '0'); } catch (_) {}
+  }
   let menu = null; // { m, anchor }
   let text = '';
   let replyTo = null;
@@ -176,7 +194,13 @@
     }
   }
   // a space's voice room: its call is joined (or started, without ringing anybody)
+  // one click on a room joins it; inside another call or room that call is left first, after asking
   async function joinRoom(room) {
+    if ($isCallActive) {
+      const ok = await ask({ message: $t('chats.switchRoom', { name: room.name }), confirm: $t('chats.switchRoomYes'), cancel: $t('common.cancel') });
+      if (!ok) return;
+      await endCall();
+    }
     try {
       const c = await App.StartRoomCall(conv.groupId, room.id);
       startCall({ alias: `${conv.name} · ${room.name}`, callId: c.callId, coordinator: c.coordinator, chatId: conv.id, room: room.id }, false);
@@ -194,7 +218,9 @@
   // goes once a channel is picked
   let screenW = 1200;
   let chansOpen = false;
-  $: compact = conv.kind === 'group' && screenW > 0 && screenW < 680;
+  $: compact = conv.kind === 'group' && screenW > 0 && screenW < (stage ? 900 : 680);
+  // beside a call the chat is a sheet over the stage when the area is narrow
+  $: sheet = stage && screenW > 0 && screenW < 1000;
   $: if (!compact) chansOpen = false;
   $: $activeChannel, conv.id, (chansOpen = false);
   // slow mode: how long until my next message here may go (who moderates is not held back); the
@@ -270,16 +296,23 @@
 
 <svelte:window on:keydown={windowKey} />
 
-<div class="chat-screen" class:compact bind:clientWidth={screenW}>
-  {#if conv.kind === 'group' && (!compact || chansOpen)}
-    <ChannelBar {conv} indent={indent && !compact} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+<div class="chat-screen" class:compact class:stage class:sheet class:chat-off={stage && (!chatOpen || theatre)} class:theatre={stage && theatre} bind:clientWidth={screenW}>
+  {#if conv.kind === 'group' && (!compact || chansOpen) && !(stage && theatre)}
+    {#if compact}
+      <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+    {:else}
+      <PanelHost kind="space" label={$t('panel.pin')}>
+        <ChannelBar {conv} on:room={(e) => joinRoom(e.detail)} on:settings={() => { info = true; threadsOpen = false; chansOpen = false; }} />
+      </PanelHost>
+    {/if}
   {/if}
   {#if compact && chansOpen}
     <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
     <div class="chan-scrim" transition:fade={{ duration: 150 }} on:click={() => (chansOpen = false)}></div>
   {/if}
+  {#if stage}<div class="stage-slot"><slot {compact} toggleChannels={() => (chansOpen = !chansOpen)} /></div>{/if}
   <div class="main">
-    <ChatHeader {conv} {back} indent={indent && (conv.kind !== 'group' || compact)} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} {info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={toggleInfo} on:threads={toggleThreads}
+    <ChatHeader {conv} {back} panelButton={conv.kind === 'group' ? 'space' : panelButton} channelsButton={compact} on:channels={() => (chansOpen = !chansOpen)} {searching} info={conv.kind === 'group' ? membersOpen : info} {threadsOpen} {hasRooms} channel={shownChan} on:back={() => dispatch('back')} on:info={() => (conv.kind === 'group' ? toggleMembers() : toggleInfo())} on:threads={toggleThreads}
       on:search={() => (searching ? closeSearch() : openSearch())} on:call={(e) => call(e.detail)} />
 
     {#if searching}
@@ -298,6 +331,11 @@
     {/if}
 
     <MessageList bind:this={list} {conv} {q} {matches} {currentMatch} />
+
+    <!-- who is typing: shown when the core reports it (conv.typing, a list of names); nothing otherwise -->
+    {#if conv.typing && conv.typing.length}
+      <div class="typing" aria-live="polite"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>{conv.typing.length === 1 ? $t('chats.typing.one', { name: conv.typing[0] }) : $t('chats.typing.many', { names: conv.typing.join(', ') })}</div>
+    {/if}
 
     {#if groupCall && !inThisCall}
       <div class="callbar" transition:fly={{ y: -6, duration: 200 }}>
@@ -339,6 +377,10 @@
     {:else}
       <ChatInfo {conv} windowed on:close={toggleInfo} />
     {/if}
+  {/if}
+
+  {#if conv.kind === 'group' && membersOpen && !info && !$thread && !threadsOpen}
+    <MembersPanel {conv} float={screenW < 1000 || stage} on:close={toggleMembers} on:settings={() => { info = true; threadsOpen = false; }} />
   {/if}
 
   {#if threadsOpen && !info && !$thread}

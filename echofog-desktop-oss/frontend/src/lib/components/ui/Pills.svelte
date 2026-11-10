@@ -18,11 +18,11 @@
 <style>
   .pills { display: flex; flex-wrap: wrap; gap: 6px; }
   .pills button {
-    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 99px;
-    font-size: 12.5px; font-weight: 560; background: var(--raised); border: 1px solid var(--line-soft); color: var(--muted);
+    display: inline-flex; align-items: center; gap: 6px; height: var(--ctl-sm); padding: 0 12px; border-radius: var(--r-pill);
+    font-size: var(--fs-sm); font-weight: var(--fw-medium); background: var(--raised); border: 1px solid var(--line-soft); color: var(--muted);
     transition: background var(--dur, 0.15s), color var(--dur, 0.15s), border-color var(--dur, 0.15s);
   }
   .pills button:hover:not(.on):not(:disabled) { color: var(--text); background: var(--hover); border-color: var(--line); }
-  .pills button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08); }
+  .pills button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-fg); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 2px var(--hover); }
 </style>

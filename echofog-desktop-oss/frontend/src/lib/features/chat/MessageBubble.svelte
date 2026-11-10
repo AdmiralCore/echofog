@@ -6,6 +6,7 @@
   import { linkify, mark, linkHost } from '../../linkify.js';
   import { t, lang } from '../../i18n/index.js';
   import Icon from '../../components/ui/Icon.svelte';
+  import Avatar from '../../components/ui/Avatar.svelte';
   import FileCard from '../../components/FileCard.svelte';
   import InviteCard from './InviteCard.svelte';
   import { findGroupLink } from '../../links.js';
@@ -23,16 +24,22 @@
 
   const chat = useChat();
   const { nameOf, quoteOf, authorName } = chat;
+  $: who = m.mine ? $me.id : conv.kind === 'group' ? m.sender : conv.peerId || conv.id;
   $: isSaved = $savedIds.has(conv.id + '/' + m.id);
   $: quoted = m.replyTo && !m.deleted ? $quoteOf(m.replyTo) : null;
   $: groupLink = !m.deleted && !m.file ? findGroupLink(m.text) : '';
 </script>
 
+<div class="mrow" class:mine={m.mine} class:first class:last class:grp={conv.kind === 'group'}>
+<div class="av-col">
+  {#if first}<span class="av-pic f"><Avatar id={who} name={$authorName(m)} src={m.mine ? '' : conv.kind === 'direct' ? conv.avatar || '' : ''} size={32} /></span>{/if}
+  {#if last}<span class="av-pic l"><Avatar id={who} name={$authorName(m)} src={m.mine ? '' : conv.kind === 'direct' ? conv.avatar || '' : ''} size={32} /></span>{/if}
+</div>
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div class="msg" data-mid={m.id} class:mine={m.mine} class:pending={m.pending} class:failed={m.failed} class:first class:last class:gone={m.deleted}
   class:hit class:current class:flash
   on:contextmenu={(e) => chat.openMenu(e, m)} on:dblclick={() => m.can.reply && !m.deleted && chat.startReply(m)}>
-  {#if conv.kind === 'group' && !m.mine && first}<div class="sender small">{$nameOf(m.sender)}</div>{/if}
+  {#if first}<div class="sender">{$authorName(m)}</div>{/if}
   <button class="more" title={$t('chats.msgActions')} aria-label={$t('chats.msgActions')} on:click={(e) => chat.openMenu(e, m)}><Icon name="chevronDown" size={15} /></button>
   {#if m.replyTo && !m.deleted}
     <button class="quote" on:click|stopPropagation={() => chat.goTo(m.replyTo)} disabled={!quoted}>
@@ -74,7 +81,8 @@
     </div>
   {/if}
   {#if !m.deleted && m.replies > 0}
-    <button class="replies" on:click|stopPropagation={() => chat.showThread(m)}><Icon name="message" size={13} /> {$t('chats.comments', { n: m.replies })}</button>
+    <button class="replies" on:click|stopPropagation={() => chat.showThread(m)}><Icon name="thread" size={14} /> {$t('chats.comments', { n: m.replies })}</button>
   {/if}
+</div>
 </div>
 {#if m.failed}<div class="fail-note small">{$t('chats.note.notSent')}</div>{:else if m.pending && last}<div class="fail-note small pend">{$t('chats.note.' + stateOf(m))}</div>{/if}

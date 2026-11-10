@@ -62,6 +62,7 @@ type packetizer struct {
 	layered bool
 }
 
+// newPacketizer makes a packetizer whose packets are at most mtu bytes, header included.
 func newPacketizer(mtu int) *packetizer {
 	return &packetizer{mtu: mtu, ssrc: rand.Uint32(), seq: uint16(rand.Uint32())}
 }
@@ -74,7 +75,9 @@ func (p *packetizer) frame(layered bool, au []byte, ts uint32, l frameLayer, key
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.layered = layered
-	out(p.packets(au, ts, l, key))
+	if pk := p.packets(au, ts, l, key); len(pk) > 0 { // an empty or parameter-sets-only access unit has none
+		out(pk)
+	}
 }
 
 // packets returns the marshaled packets of one access unit with the RTP timestamp ts (90 kHz),
@@ -123,12 +126,16 @@ const (
 	pacerBurst    = 2 * time.Millisecond // what the bucket may hold when the queue was idle
 )
 
+// pacedFrame is the packets of one encoded frame, waiting in the pacer.
 type pacedFrame struct {
 	packets  [][]byte
 	bytes    int
 	enqueued time.Time
 }
 
+// pacer sends the packets of the frames pushed to it: at pacingFactor times the bitrate, and faster when
+// that would keep the oldest frame longer than maxPacerDelay. It is a token bucket on a 1 ms tick;
+// the sleep and the clock are fields so the tests drive it with a fake one.
 type pacer struct {
 	publish func([]byte)
 	bitrate atomic.Uint64 // bits per second the encoder targets
@@ -147,6 +154,7 @@ type pacer struct {
 	lastDelay                  atomic.Int64 // ns a frame waited before its last packet left
 }
 
+// newPacer makes a pacer that hands every packet to publish, for a stream of bitrate bits a second.
 func newPacer(publish func([]byte), bitrate uint64) *pacer {
 	p := &pacer{publish: publish, now: time.Now, sleep: time.Sleep,
 		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
@@ -154,10 +162,14 @@ func newPacer(publish func([]byte), bitrate uint64) *pacer {
 	return p
 }
 
+// start runs the pacer on a goroutine of its own.
 func (p *pacer) start() { go p.run() }
 
 // push queues the packets of one frame.
 func (p *pacer) push(packets [][]byte) {
+	if len(packets) == 0 {
+		return // run takes packets[0] of every queued frame
+	}
 	f := &pacedFrame{packets: packets, enqueued: p.now()}
 	for _, b := range packets {
 		f.bytes += len(b)
@@ -180,6 +192,10 @@ func (p *pacer) rate(queued int, age time.Duration) float64 {
 	return max(r, float64(queued)/left.Seconds())
 }
 
+// run is the pacer's loop: it fills the bucket for the time that passed, sends what the bucket pays for
+// (whole packets, oldest frame first) and sleeps a tick, or until a frame is pushed when the queue is
+// empty. A full bucket after an idle spell holds only pacerBurst, so a frame after silence does not go
+// out in one burst.
 func (p *pacer) run() {
 	defer close(p.done)
 	var budget float64

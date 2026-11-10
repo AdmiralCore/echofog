@@ -30,6 +30,7 @@ const (
 	dxgiErrorStillDrawing = hresult(-2005270518) // 0x887A000A DXGI_ERROR_WAS_STILL_DRAWING
 )
 
+// previewer is the picker's live thumbnails: one capture per wanted source, read at a low rate.
 type previewer struct {
 	mu      sync.Mutex
 	want    []string
@@ -69,6 +70,8 @@ func Previews(ids []string) map[string]string {
 	return out
 }
 
+// previewSource is one thumbnail: a small capture of a source, converted to a small BGRA picture and
+// copied to a CPU-readable texture a beat later, so the GPU is not waited for.
 type previewSource struct {
 	staging   unsafe.Pointer // a CPU-readable copy of tex, read a beat after it was made
 	copied    bool           // staging holds a picture not read yet
@@ -79,6 +82,7 @@ type previewSource struct {
 	failedAt  time.Time
 }
 
+// close releases the capture and its textures.
 func (s *previewSource) close() {
 	if s.conv != nil {
 		s.conv.close()
@@ -91,6 +95,7 @@ func (s *previewSource) close() {
 	}
 }
 
+// stop ends the previewer and forgets its pictures.
 func (p *previewer) stop() {
 	p.mu.Lock()
 	p.running = false
@@ -98,6 +103,9 @@ func (p *previewer) stop() {
 	p.mu.Unlock()
 }
 
+// run is the previewer's goroutine: every 500 ms it opens the captures of the sources wanted, closes
+// the ones no longer wanted, reads the pictures copied the beat before and starts the next copies. It
+// ends when nothing was asked for a while.
 func (p *previewer) run() {
 	undo, err := mtaThread()
 	if err != nil {
@@ -167,6 +175,7 @@ func (p *previewer) run() {
 	}
 }
 
+// open starts the capture of a source for a thumbnail.
 func (s *previewSource) open(d *device, id string) error {
 	tg, err := target(id)
 	if err != nil {
@@ -211,7 +220,10 @@ func (s *previewSource) grab(d *device) (string, bool) {
 	switch {
 	case err != nil:
 	case resized:
-		_ = s.remake(d) // the next frame has the new size
+		if s.remake(d) != nil { // the next frame has the new size
+			s.close()
+			*s = previewSource{failedAt: time.Now()} // nothing half-made is used; retried later
+		}
 		img = nil
 	case got && !s.copied:
 		if s.conv.convert(s.cap.latest, s.cap.contentW, s.cap.contentH, s.view) == nil {

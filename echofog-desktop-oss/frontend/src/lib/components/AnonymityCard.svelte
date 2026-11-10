@@ -110,18 +110,18 @@
   .opts { display: flex; gap: 8px; flex-wrap: wrap; }
   .opt {
     flex: 1 1 150px; display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
-    padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface-2); white-space: normal; height: auto; font-weight: var(--fw-regular); color: var(--text);
     cursor: pointer; text-align: left;
   }
-  .opt.sel { border-color: var(--accent); background: var(--accent-weak, var(--surface)); }
+  .opt.sel { border-color: var(--accent); background: var(--accent-soft); }
   .opt .name { font-weight: 600; }
   .opt.later { opacity: 0.55; cursor: not-allowed; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .ico.on { color: #38c172; }
-  .now { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 13px; background: var(--raised); color: var(--muted); }
-  .now.hidden { color: #38c172; }
+  .ico.on { color: var(--ok-fg); }
+  .now { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 10px; border-radius: var(--r-md); font-size: var(--fs-sm); background: var(--surface-2); color: var(--muted); }
+  .now.hidden { color: var(--ok-fg); }
   .what { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
   .check { display: flex; align-items: center; gap: 8px; }
   .check input { width: auto; }
-  .warn { color: #c98a00; }
+  .warn { color: var(--warn-fg); }
 </style>
