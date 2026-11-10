@@ -232,10 +232,11 @@ already publishes.
 
 ### Before publishing: check the cover
 
-Run the preflight before the first start, with the name and the address but no profile yet:
+Run the preflight before the first start, with the name, the address and the site folder but no
+profile yet:
 
 ```sh
-echofog-node v2 doctor --cover node.example.org:443 --advertise 203.0.113.10
+echofog-node v2 doctor --cover node.example.org:443 --advertise 203.0.113.10 --site-dir /srv/echofog-site
 ```
 
 After the profile exists, the bare flag takes the cover and the site folder from `server.json`:
@@ -249,14 +250,16 @@ address, and prints one line per rule with the reason and the fix. The A/AAAA re
 followed) must lead to `ECHOFOG_ADVERTISE_ADDR`. TCP 443 must answer. The handshake must be TLS 1.3
 with `h2` in ALPN, and the certificate must chain to the system roots, name the cover and not be
 self-signed; fewer than 14 days left is a warning. `GET https://<cover>/` must answer 200 with HTML,
-`index.html` must be in the site folder, and the folder must be mounted into the container. Exit
-code 0 means no errors (warnings are allowed), 1 means at least one error.
+`index.html` must be in the site folder, and the folder must be mounted into the container. The
+folder is required: pass the path the node sees (`/srv/echofog-site` on the host, `/srv/site` in the
+container); with no folder at all the site line is an error. Exit code 0 means no errors (warnings
+are allowed), 1 means at least one error.
 
 A free name works the same way. DuckDNS gives `name.duckdns.org`: point it at the server's address,
 wait for the record, then check:
 
 ```sh
-echofog-node v2 doctor --cover name.duckdns.org:443 --advertise 203.0.113.10
+echofog-node v2 doctor --cover name.duckdns.org:443 --advertise 203.0.113.10 --site-dir /srv/echofog-site
 ```
 
 ## 6. Firewall and the provider's panel
