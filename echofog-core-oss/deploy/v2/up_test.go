@@ -71,7 +71,7 @@ func TestUpScript(t *testing.T) {
 		"ECHOFOG_ADVERTISE_ADDR", "ECHOFOG_IMAGE", "ECHOFOG_PORT", "ECHOFOG_NOISE_PORT",
 		"ECHOFOG_INVITES", "ECHOFOG_COVER", "ECHOFOG_SITE_DIR",
 		"deploy/v2/docker-compose.yml", "--env-file", "compose", "pull", "up -d",
-		"status --plain", "invite create", "--out /data/invite.txt", "/data/recovery-phrase.txt",
+		"status --data /data --plain", "invite create", "--out /data/invite.txt", "/data/recovery-phrase.txt",
 		"ef-test", "ef-test-data", "8443", "down -v",
 	} {
 		if !strings.Contains(sh, must) {
@@ -135,7 +135,7 @@ func TestUpScriptProductionPlan(t *testing.T) {
 	}
 	for _, must := range []string{
 		"-p v2", "echofog-v2-node", "deploy/v2/docker-compose.yml", "deploy/v2/.env",
-		"--env-file", "pull", "up -d", "status --plain", "/data/recovery-phrase.txt",
+		"--env-file", "pull", "up -d", "status --data /data --plain", "/data/recovery-phrase.txt",
 		"invite create", "--out /data/invite.txt",
 	} {
 		if !strings.Contains(out, must) {
