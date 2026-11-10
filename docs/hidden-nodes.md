@@ -116,7 +116,7 @@ If the card says *This computer does not know an address others can reach it at 
 until the app is connected to the network.
 
 **Remember:** while your exit is on, the traffic of the people you invited leaves to the Internet
-from **your** address. Read [What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection).
+from **your** address. Read [What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection-as-an-exit).
 
 ## Step by step: use a link somebody gave you (desktop app)
 

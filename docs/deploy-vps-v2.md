@@ -46,8 +46,8 @@ and the noise3 port 444/udp, as `deploy/v2/docker-compose.yml` does.
 
 `deploy/v2/install.sh` downloads the binary over https and starts the node's own installer. **The trust
 root is the release public key block written inside `install.sh`.** The script checks the signatures of
-the signed release record (`release.txt`) with `ssh-keygen -Y verify` (two of the three release keys must
-sign it) and compares the size and SHA-256 of the binary with that record. The downloaded file becomes
+the signed release record (`release.txt`) with `ssh-keygen -Y verify` (at least two of the release keys
+must sign it) and compares the size and SHA-256 of the binary with that record. The downloaded file becomes
 executable and is started only after that; if any check fails, it is deleted and nothing is installed.
 The node's own installer (`echofog-node v2 setup`) then checks the binary once more against the signed
 manifest. With a terminal, `setup` shows the full-screen installer (presets, system check, one summary
@@ -80,16 +80,19 @@ installed. A deliberate rollback above the first two bounds needs `--allow-rollb
 warning. When the release keys are replaced, an old `install.sh` stops and asks for the new one; the
 procedure is in [release-trust.md](release-trust.md).
 
-The installer creates the system user `echofog`, the data folder `/var/lib/echofog` (mode 0700), a
-hardened systemd unit, and prints the commands that open the firewall. It does not change the
-firewall and does not start the service unless `--start` is given. Without `--preset` it asks the
-questions in the terminal (language, role, domain, site folder, port, address). With a domain the
-installer serves reality2-quic and reality2-tcp on the chosen port and noise3 on the next one, and
-writes the public card. Presets: `relay`, `exit-free` (shares this server's connection: the
-responsibility for that traffic stays with the operator), `home-entry`. The paid and private exits
-come later.
+The installer runs `echofog-node v2 setup`. It creates the system user `echofog`, the data folder
+`/var/lib/echofog` (mode 0700) and a hardened systemd unit, then enables and starts the service
+(`systemctl enable --now echofog-node`). It does not change the firewall by itself: it prints the
+commands that open the ports and runs them only with `--open-ports`. The `--start` flag belongs to
+the older `v2 install` command; `setup`, and therefore `install.sh`, does not accept it. Without
+`--preset` it asks the questions in the terminal (language, role, domain, site folder, port,
+address). With a domain the installer serves reality2-quic and reality2-tcp on the chosen port and
+noise3 on the next one, and writes the public card. Presets: `relay`, `exit-free` (shares this
+server's connection: the responsibility for that traffic stays with the operator), `home-entry`.
+The paid and private exits come later.
 
-Then start it: `systemctl enable --now echofog-node`.
+The service is already enabled and started by the installer; `systemctl status echofog-node` shows
+whether it is up.
 
 ## 4. First start and the recovery phrase
 
