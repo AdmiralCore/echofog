@@ -84,9 +84,9 @@ export function ChatThreadTitle(arg1:node.ChatRef,arg2:string,arg3:string):Promi
 
 export function ChatThreads(arg1:node.ChatRef):Promise<Array<convlog.Message>>;
 
-export function CheckForUpdate():Promise<main.UpdateInfo>;
-
 export function CheckBootstrapNode(arg1:string):Promise<boolean>;
+
+export function CheckForUpdate():Promise<main.UpdateInfo>;
 
 export function CheckProxy(arg1:string):Promise<void>;
 
@@ -420,6 +420,16 @@ export function SetVPNAutoSwitch(arg1:boolean):Promise<void>;
 
 export function SetWholeComputer(arg1:boolean):Promise<void>;
 
+export function SharingApprove(arg1:string,arg2:string):Promise<void>;
+
+export function SharingCloseOpen():Promise<void>;
+
+export function SharingOpenFor(arg1:number):Promise<void>;
+
+export function SharingReject(arg1:string):Promise<void>;
+
+export function SharingRevoke(arg1:string):Promise<void>;
+
 export function ShowTransferFile(arg1:string):Promise<void>;
 
 export function StartGroupCall(arg1:string):Promise<node.GroupCall>;
@@ -489,13 +499,3 @@ export function VaultExecuteWithdraw():Promise<string>;
 export function VaultRequestWithdraw():Promise<string>;
 
 export function WatchStream(arg1:string):Promise<void>;
-
-export function SharingApprove(arg1:string, arg2:string):Promise<void>;
-
-export function SharingReject(arg1:string):Promise<void>;
-
-export function SharingRevoke(arg1:string):Promise<void>;
-
-export function SharingOpenFor(arg1:number):Promise<void>;
-
-export function SharingCloseOpen():Promise<void>;
