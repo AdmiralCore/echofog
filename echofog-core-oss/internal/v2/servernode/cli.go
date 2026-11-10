@@ -31,13 +31,14 @@ usage:
   echofog-node v2 init   --data DIR --listen noise3=BIND:PORT --advertise IP [--invite-listen ...]
                          [--roles relay,mailbox,dht-server,exit] [--cover HOST:PORT --site-dir DIR]
   echofog-node v2 run    --data DIR
+  echofog-node v2 entry  --data DIR                                permanent entry line for your clients
   echofog-node v2 status --data DIR [--json] [--watch [--interval 2s]] [--check-update] [--lang ru|en]
   echofog-node v2 install --binary FILE --manifest FILE [--preset ... --advertise IP]
                          [--port N] [--domain NAME] [--start] [--yes] [--lang ru|en]   (root; verifies before installing)
   echofog-node v2 uninstall [--data DIR] [--purge [--yes]] [--lang ru|en]            (root)
   echofog-node v2 doctor --data DIR [--dns] [--lang ru|en]
   echofog-node v2 update --manifest-url URL [--check] [--yes] [--lang ru|en]
-  echofog-node v2 invite create --data DIR [--access 30d] [--link 7d] [--max-entries N]
+  echofog-node v2 invite create --data DIR [--access 30d] [--link 7d] [--max-entries N] [--out FILE]
   echofog-node v2 invite list   --data DIR
   echofog-node v2 invite extend --data DIR ID --access 7d
   echofog-node v2 rotate-keys   --data DIR
@@ -45,8 +46,9 @@ usage:
 setup prints the recovery phrase once and keeps it in recovery-phrase.txt until the operator
 confirms; the plain mode (no terminal, CI, ssh -T) never prints it or the operator token.
 status, invite and rotate-keys talk to the running node through its operator API on 127.0.0.1 with
-the token in DIR/operator.token. doctor sends nothing out unless --dns is given. update installs
-nothing without a yes from the operator and never goes back to an older version.
+the token in DIR/operator.token. entry reads the profile and needs no running node. doctor sends
+nothing out unless --dns is given. update installs nothing without a yes from the operator and never
+goes back to an older version.
 Every flag may also be set by the environment: --data is ECHOFOG_DATA_DIR.
 `
 
@@ -128,6 +130,8 @@ func MainIO(args []string, env func(string) string, stdin io.Reader, stdout, std
 		err = cmdUpdate(args[1:], env, stdin, stdout, stderr)
 	case "run":
 		err = cmdRun(args[1:], env, stdout)
+	case "entry":
+		err = cmdEntry(args[1:], env, stdout)
 	case "status":
 		err = cmdStatus(args[1:], env, stdout)
 	case "invite":
@@ -201,6 +205,53 @@ func cmdRun(args []string, env func(string) string, out io.Writer) error {
 	c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return s.Close(c)
+}
+
+// cmdEntry prints the permanent entry lines of a stopped or running node. It reads the profile
+// itself, so the operator can hand out the lines before the node is up. Only the public masking key
+// is printed; the private one stays on disk and is wiped with the device.
+func cmdEntry(args []string, env func(string) string, out io.Writer) error {
+	fs := flag.NewFlagSet("entry", flag.ContinueOnError)
+	data := dataFlag(fs, env)
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if err := needData(*data); err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return usageError{fmt.Errorf("unexpected arguments: %v", pos)}
+	}
+	idf, err := loadIdentity(*data)
+	if err != nil {
+		return err
+	}
+	raw, err := readLimited(filepath.Join(*data, configFileName), MaxConfigSize)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s is not a server profile: run `echofog-node v2 init` first", *data)
+		}
+		return err
+	}
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		return err
+	}
+	account, device, err := deriveIdentity(idf)
+	if err != nil {
+		return err
+	}
+	defer account.Destroy()
+	defer device.Destroy()
+	lines := entryLines(cfg, device.Masking().Public(), device.ID())
+	if len(lines) == 0 {
+		return errors.New("the profile has no noise3 listener: there is no permanent entry line")
+	}
+	for _, l := range lines {
+		fmt.Fprintln(out, l)
+	}
+	return nil
 }
 
 // ---- operator client
@@ -281,6 +332,7 @@ func cmdInvite(args []string, env func(string) string, out io.Writer) error {
 	accessTerm := fs.String("access", "", "access term, like 30d")
 	linkTerm := fs.String("link", "", "link lifetime, like 7d")
 	maxEntries := fs.Int64("max-entries", 0, "how many contacts may use the link")
+	outFile := fs.String("out", "", "write the link to this file (invite create)")
 	_, pos, err := clientFor(fs, data, rest)
 	if err != nil {
 		return err
@@ -293,6 +345,9 @@ func cmdInvite(args []string, env func(string) string, out io.Writer) error {
 		if _, err := ParseDuration(t); err != nil {
 			return usageError{err}
 		}
+	}
+	if sub != "create" && *outFile != "" {
+		return usageError{errors.New("--out is only for invite create")}
 	}
 	switch sub {
 	case "create":
@@ -312,6 +367,13 @@ func cmdInvite(args []string, env func(string) string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "id:           %s\nlink:         %s\nlink expires: %s\n", res.ID, res.Link, res.LinkExpires.Format(time.RFC3339))
+		if *outFile != "" {
+			// The link only: the file is a convenience for the operator, not a record of the
+			// invitation. It is private (mode 0600) and replaced whole by writePrivate.
+			if err := writePrivate(*outFile, []byte(res.Link)); err != nil {
+				return fmt.Errorf("cannot write the link to %s: %w", *outFile, err)
+			}
+		}
 		return nil
 	case "list":
 		if len(pos) != 0 {

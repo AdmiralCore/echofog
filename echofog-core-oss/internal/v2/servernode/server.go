@@ -942,6 +942,25 @@ func (s *Server) Close(ctx context.Context) error {
 
 // ---- Backend
 
+// entryLines returns the permanent entry lines of a profile (T5.5): the address of every noise3
+// listener, the public masking key and the device id. The masking private key is never part of a
+// line, and only its public half leaves the node.
+func entryLines(cfg *Config, maskPub keys.AKey, deviceID [32]byte) []string {
+	var out []string
+	for _, l := range cfg.Listen {
+		if l.Suite != "noise3" {
+			continue
+		}
+		_, port, err := net.SplitHostPort(l.Bind)
+		if err != nil {
+			continue // a saved configuration is validated; keep a bad line out of the output
+		}
+		out = append(out, "noise3://"+net.JoinHostPort(l.Advertise, port)+
+			"?mask="+hex.EncodeToString(maskPub.Key())+"&device="+hex.EncodeToString(deviceID[:]))
+	}
+	return out
+}
+
 // Status implements Backend.
 func (s *Server) Status() StatusInfo {
 	nid, did := s.account.NodeID(), s.device.ID()
@@ -994,6 +1013,12 @@ func (s *Server) Status() StatusInfo {
 	sort.Strings(st.Warnings)
 	for _, l := range s.cfg.Listen {
 		st.Listen = append(st.Listen, l.Suite+" "+l.Advertise+" ("+l.Bind+")")
+	}
+	if lines := entryLines(s.cfg, s.device.Masking().Public(), s.device.ID()); len(lines) > 0 {
+		st.Entries = lines
+		if len(lines) == 1 {
+			st.Entry = lines[0]
+		}
 	}
 	return st
 }
