@@ -181,7 +181,27 @@ func TestRoom_SoundSurvivesScatteredLoss(t *testing.T) {
 		require.NoError(t, b.cm.PublishStreamAudio("s", unit(i, 300)))
 		time.Sleep(2 * time.Millisecond)
 	}
-	time.Sleep(300 * time.Millisecond)
+	// Under -race on a two-core runner the last datagrams arrive well after the publisher stops,
+	// so wait for the loss budget instead of sleeping once: 3 in 100 may be lost on every hop.
+	need := units * 97 / 100
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		short := false
+		for _, nd := range nodes {
+			if nd == b {
+				continue
+			}
+			if nd.log.count(media.FrameAudio, b.id, "voice") < need ||
+				nd.log.count(media.FrameStreamAudio, b.id, "s") < need {
+				short = true
+				break
+			}
+		}
+		if !short || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	for _, nd := range nodes {
 		if nd == b {
 			continue
