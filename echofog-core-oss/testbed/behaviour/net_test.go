@@ -141,8 +141,8 @@ func TestNoise3CarriesATransferThroughLossAndDelay(t *testing.T) {
 func TestNoise3SurvivesAChangeOfSourceAddress(t *testing.T) {
 	r, nm := transfer(t, NetemConfig{Seed: 4, Delay: 10 * time.Millisecond}, 512<<10, once(func(n *Netem) { n.Rebind() }))
 	require.True(t, r.Connected, r.Err)
-	assert.Equal(t, r.Bytes, r.Echoed)
-	assert.LessOrEqual(t, r.MaxGap, 10*time.Second, "no stall longer than the 10 s of the criterion")
+	assert.Equal(t, r.Bytes, r.Echoed, "%s", r)
+	assert.LessOrEqual(t, r.MaxGap, 10*time.Second, "no stall longer than the 10 s of the criterion: %s", r)
 	_ = nm
 }
 
