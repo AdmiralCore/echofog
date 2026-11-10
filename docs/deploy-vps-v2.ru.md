@@ -20,17 +20,25 @@ DHT-сервера, при желании — с выходом. Все пути
 
 ```sh
 git clone --branch v2 --single-branch https://github.com/AdmiralCore/echofog.git && cd echofog/echofog-core-oss
-./deploy/v2/up.sh --advertise 203.0.113.10
-docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env exec node echofog-node v2 invite create --data /data --access 30d
+./deploy/v2/up.sh --advertise 203.0.113.10 --invites
+docker compose -p v2 -f deploy/v2/docker-compose.yml -f deploy/v2/docker-compose.up.yml --env-file deploy/v2/.env exec -T node echofog-node v2 invite create --data /data --access 30d --out /data/invite.txt
 ```
 
+Третья команда пишет ссылку в `/data/invite.txt`; прочитать её можно той же командой с
+`exec -T node cat /data/invite.txt`. Если ссылки-приглашения не нужны, `--invites` из второй
+команды убирается, и третья тогда не нужна.
+
 `up.sh` пишет `deploy/v2/.env` (права 0600) только с теми значениями, которые отличаются от примера,
-скачивает образ, запускает ноду, ждёт состояния `healthy` от healthcheck и печатает `v2 status --plain`,
-путь к фразе восстановления (`/data/recovery-phrase.txt` в томе) и готовую команду приглашения.
-`--invites` включает ссылки-приглашения, `--cover node.example.org:443 --site /srv/echofog-site` —
-публичную карточку, `--test` — одноразовый запуск на первых свободных UDP-портах с 8443, `--dry-run`
-показывает все команды заранее. Порты 443/tcp и 443/udp открываются в файрволе и в панели провайдера
-до того, как появятся пиры; у тестового запуска свои порты.
+сохраняет прежний `.env` как `.env.bak.<дата>`, скачивает образ, запускает ноду, ждёт состояния
+`healthy` от healthcheck и печатает `v2 status --plain`, путь к фразе восстановления
+(`/data/recovery-phrase.txt` в томе) и, при `--invites`, команду приглашения.
+`--cover node.example.org:443 --site /srv/echofog-site` добавляет публичную карточку, `--test` —
+одноразовый запуск на первых свободных UDP-портах с 8443, `--dry-run` показывает все команды заранее.
+Порты 443/tcp и 443/udp открываются в файрволе и в панели провайдера до того, как появятся пиры;
+приглашениям нужен 444/udp (445/udp с обложкой), у тестового запуска свои порты.
+
+Флаги задают профиль при первом запуске: повторный запуск на том же томе не меняет ни слушателей,
+ни `ECHOFOG_ROLES`, поэтому для новых параметров нужен пустой том.
 
 Дальше в руководстве тот же путь с объяснением каждого шага, а раздел 12 — нативный установщик.
 

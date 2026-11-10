@@ -19,17 +19,25 @@ Three commands on a fresh Ubuntu or Debian server, from a root shell with Docker
 
 ```sh
 git clone --branch v2 --single-branch https://github.com/AdmiralCore/echofog.git && cd echofog/echofog-core-oss
-./deploy/v2/up.sh --advertise 203.0.113.10
-docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env exec node echofog-node v2 invite create --data /data --access 30d
+./deploy/v2/up.sh --advertise 203.0.113.10 --invites
+docker compose -p v2 -f deploy/v2/docker-compose.yml -f deploy/v2/docker-compose.up.yml --env-file deploy/v2/.env exec -T node echofog-node v2 invite create --data /data --access 30d --out /data/invite.txt
 ```
 
-`up.sh` writes `deploy/v2/.env` (mode 0600) with only the values that differ from the example, pulls the
-image, starts the node, waits for the healthcheck to report `healthy` and prints `v2 status --plain`, the
-path of the recovery phrase (`/data/recovery-phrase.txt` in the volume) and a ready invitation command.
-Add `--invites` for invitation links, `--cover node.example.org:443 --site /srv/echofog-site` for a
-public card, `--test` for a throwaway run on the first free UDP pair from 8443, and `--dry-run` to see
-every command first. Open 443/tcp and 443/udp in the firewall and in the provider's panel before
-expecting peers; the test run uses its own ports instead.
+The third command writes the link to `/data/invite.txt`; read it with the same prefix and
+`exec -T node cat /data/invite.txt`. Without invitation links, drop `--invites` from the second
+command and the third command with it.
+
+`up.sh` writes `deploy/v2/.env` (mode 0600) with only the values that differ from the example, keeps an
+existing `.env` as `.env.bak.<date>`, pulls the image, starts the node, waits for the healthcheck to
+report `healthy` and prints `v2 status --plain`, the path of the recovery phrase
+(`/data/recovery-phrase.txt` in the volume) and, with `--invites`, the invitation command.
+`--cover node.example.org:443 --site /srv/echofog-site` adds a public card, `--test` is a throwaway
+run on the first free UDP pair from 8443, and `--dry-run` shows every command first. Open 443/tcp and
+443/udp in the firewall and in the provider's panel before expecting peers; invitations take 444/udp
+(445/udp with a cover), and the test run uses its own ports instead.
+
+The flags shape the profile at the first start: a later run on the same volume changes neither the
+listeners nor `ECHOFOG_ROLES`, so new options need an empty volume.
 
 The rest of this guide is the same path with every step explained, and section 12 is the native
 installer.
