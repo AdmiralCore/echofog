@@ -128,7 +128,7 @@ func TestInitVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inner := pattern(1200, 0)
+	inner := pattern(700, 0)
 	got, err := SealInit(keys, hx(t, v.Ephemeral.Repr), v.Init.TS, inner, v.Init.TotalLen)
 	if err != nil {
 		t.Fatalf("SealInit: %v", err)

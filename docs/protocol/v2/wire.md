@@ -185,26 +185,38 @@ The first datagram of a flow, initiator → responder:
 InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner ‖ zero padding
 ```
 
-- `inner` is one inner QUIC datagram (a QUIC Initial). The inner QUIC stack MUST be configured to send
-  Initial datagrams of exactly 1200 bytes.
-- The total length is `max(drawn, 71 + inner_len)`, where `drawn` comes from the shape profile (§9;
-  default uniform in [1280, 1420]), and is never more than the path MTU minus IP and UDP headers
-  (1452 for IPv4 on a 1500-byte path; the path requirement of noise3 is stated below). If the
-  inner datagram does not fit, the sender takes the largest allowed length; it never splits an inner
-  datagram.
+- `inner` is one inner QUIC datagram (it carries a QUIC Initial while the inner handshake runs). Both ends
+  of a noise3 flow are EchoFog, so the 1200-byte minimum of RFC 9000 §14.1 does not apply inside noise3:
+  the inner QUIC stack of the **initiator** sends every datagram of the handshake flight at a size drawn
+  once per flow, the *flight size* `F − 71`, with QUIC PADDING frames up to that size (the padding is inside
+  the inner AEAD, so it is not visible on the wire), and the inner stack of the **responder** accepts
+  Initial datagrams of any size from `MinInner` (= 200 bytes) up, and does not pad its own Initial packets.
+  `F` is drawn per flow, uniform over the profile's `init_len` (§9; default [900, 1200]) and clamped to the
+  datagram ceiling. After the inner handshake completes the inner datagram size is the ordinary one.
+- The total length is `max(drawn, 71 + inner_len)`, where `drawn` comes from the profile in the same
+  way. **Before the first authenticated responder packet no datagram of a flow is longer than 1200
+  bytes.** The length of the first datagram therefore differs from flow to flow (it is never a fixed
+  value), and it is never more than the path MTU minus IP and UDP headers. The inner ClientHello (it
+  carries `X25519MLKEM768`) does not fit one inner datagram of `F − 71` bytes; it spans two or more inner
+  datagrams, each sent as its own Init (below). An Init is never split by the carrier: every Init holds
+  exactly one inner datagram.
 - `flags` bits are reserved; senders MUST send 0; receivers MUST ignore them (they are inside the
   AEAD, so they cannot be used to fingerprint).
 - Overhead: 71 bytes plus padding.
 
-**Path requirement (`ErrPathTooSmall`).** An Init carries 71 bytes of header and a 1200-byte inner QUIC
-Initial, so noise3 needs a path that carries at least **1271 bytes** of UDP payload: an IPv4 path MTU of
-at least 1299, or an IPv6 path MTU of at least 1319. The universal floor of **1232 bytes** of UDP
-payload applies to the other carriers only. It is not a reason to shrink the inner Initial or the path
-requirement: 1271 stands. An Init is never split across datagrams. If the initiator learns that the path
-cannot carry 1271 bytes (an ICMP Packet Too Big message, a known path MTU below that, or no answer to an
-Init after its retries), it marks noise3 unusable on that path and **falls back to the TCP carriers**
-(`reality2-tcp` or `ws2`, §1) without waiting for a full handshake timeout. A sender whose datagram
-ceiling is below 1271 bytes fails with `ErrPathTooSmall` for noise3.
+**Path requirement (`ErrPathTooSmall`).** No Init is longer than 1200 bytes, so noise3 passes the universal
+floor of **1232 bytes** of UDP payload (an IPv6 path of MTU 1280) like the other carriers. The lower bound
+of `init_len` is 900 bytes: a sender whose datagram ceiling is below 900 bytes fails with `ErrPathTooSmall`
+for noise3; a ceiling between 900 and 1200 narrows the range of `F` to the ceiling. If the initiator learns
+that the path cannot carry its Inits (an ICMP Packet Too Big message, a known path MTU below the datagram it
+drew, or no answer to an Init after its retries), it marks noise3 unusable on that path and **falls back to
+the TCP carriers** (`reality2-tcp` or `ws2`, §1) without waiting for a full handshake timeout.
+
+**Anti-amplification.** Until the inner QUIC handshake is confirmed and an authenticated packet has arrived
+from the current reply address, a responder flow sends at most **3 times the bytes it has received** on the
+flow (outer datagram bytes, counted over all Inits and data packets of the flow). The inner QUIC stack applies
+the same factor to the inner datagram bytes it has received. Responder datagrams over the limit are
+withheld, not truncated.
 
 Until it has received an authenticated responder packet, the initiator sends every outgoing inner
 datagram as a **fresh** Init (new ephemeral key, new `repr`), so retransmissions never repeat bytes
@@ -218,7 +230,7 @@ Init is **MUST NOT**.
 
 A datagram that does not belong to an established flow (§2.6) is treated as a candidate Init:
 
-1. If its length is below 71 + 1200, drop.
+1. If its length is below 71 + `MinInner` (271 bytes), drop.
 2. Within the stranger budget (§2.1): decode `u`; for each live masking key compute `z` and `okm`,
    and compare `sel` in constant time. No match: drop. All-zero `z`: drop.
 3. Open `box` with `k_init`; failure: drop.
@@ -292,7 +304,7 @@ Before the first Init, the initiator MAY send junk datagrams and decoys as its s
 (§9): random-byte datagrams, or datagrams shaped like a DNS query or a QUIC Initial of another
 connection. The responder drops them at step 2 of §2.5. They exist only to change the first-packet
 shape seen by classifiers; they carry nothing. The first Init itself remains a fully random datagram
-of at least 1271 bytes; a profile that makes the Init itself look like a QUIC long-header packet is
+of 900 to 1200 bytes (§2.4); a profile that makes the Init itself look like a QUIC long-header packet is
 future work ([security.md](security.md) §4).
 
 ## 3. reality2-quic
@@ -810,7 +822,7 @@ Built-in profiles:
 
 | Field | `default-udp` (1) | `default-tls` (2) |
 |---|---|---|
-| `init_len` | [1280, 1420] | — |
+| `init_len` | [900, 1200] | — |
 | `pad` | [0, 48] per packet, never beyond the path MTU | [0, 256] per record within the budget |
 | `buckets` | — | 512, 1024, 1460, 2920, 4096 |
 | `pad_budget` | — | [4096, 16384], drawn per stream direction |

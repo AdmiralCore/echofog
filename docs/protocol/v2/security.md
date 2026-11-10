@@ -74,7 +74,7 @@ independent audit of the first draft ([CHANGES-from-v1.md](CHANGES-from-v1.md) Â
    behaviour under the real protocol).
 3. **Bulk data post-quantum confidentiality** rests on `X25519MLKEM768` TLS or on sealed mode; a bug in
    the group check would weaken it silently.
-4. **Fully random first datagrams.** A noise3 Init is a â‰¥ 1271-byte datagram without any structure.
+4. **Fully random first datagrams.** A noise3 Init is a datagram of 900 to 1200 bytes without any structure.
    "Fully encrypted traffic" (FET) classifiers can flag the class without knowing any key. The GFW
    applies its FET rule to TCP today; moving the rule to UDP is a cheap evolution, so `noise3` is
    used for same-country hops only (D21) and is not claimed as protection against a global passive

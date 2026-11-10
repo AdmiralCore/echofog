@@ -803,8 +803,8 @@ func genNoise3() (any, []byte) {
 	kSel, kInit, kI2R, kR2I, hpI2R, hpR2I := okm[0:32], okm[32:64], okm[64:96], okm[96:128], okm[128:160], okm[160:192]
 	sel := hmacSHA(kSel, k.repr)[:16]
 
-	inner := pattern(1200, 0) // synthetic stand-in for a QUIC Initial
-	total := 1300
+	inner := pattern(700, 0) // synthetic stand-in for a flight-size QUIC Initial datagram
+	total := 1000
 	padLen := total - 71 - len(inner)
 	initPlain := cat(u32(uint32(fixedTime)), []byte{0}, u16(uint16(len(inner))), inner, make([]byte, padLen))
 	box := chachaSeal(kInit, make([]byte, 12), initPlain, cat(k.repr, sel))
@@ -849,7 +849,7 @@ func genNoise3() (any, []byte) {
 		{"sel", hx(sel)},
 		{"init", O{
 			{"ts", fixedTime},
-			{"inner", "00 01 02 … (1200 bytes, byte i = i mod 256)"},
+			{"inner", "00 01 02 … (700 bytes, byte i = i mod 256)"},
 			{"inner_len", len(inner)},
 			{"pad_len", padLen},
 			{"total_len", total},
