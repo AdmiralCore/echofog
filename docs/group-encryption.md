@@ -2,6 +2,9 @@
 
 # Group encryption
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 How group messages are protected, how they reach members who were offline, and what this does
 not protect against. For the overview of the whole system see [How it works](how-it-works.md).
 

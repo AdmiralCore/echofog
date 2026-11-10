@@ -2,6 +2,9 @@
 
 # Private access: hidden and isolated nodes
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 This guide is for anyone who wants to share their connection **only with certain people**: family,
 friends, a team, or customers who pay you directly. You do not need to be technical: each mode is
 explained in plain words first, then there are step-by-step instructions. The technical details are

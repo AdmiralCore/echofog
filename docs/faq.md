@@ -2,6 +2,9 @@
 
 # EchoFog FAQ
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 Short, honest answers. If something here is unclear or seems wrong, please tell us.
 
 ## Is it a VPN or a messenger?

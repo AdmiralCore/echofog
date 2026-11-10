@@ -2,6 +2,9 @@
 
 # Protecting a node
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 What a public node (a relay, a signaling node or an exit on a VPS) is protected against, how to set
 it up, how to see the protection at work, and what it does not cover. Every flag and its default
 is listed in [Run a node](run-a-node.md); this page explains why they are there.

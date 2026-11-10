@@ -2,6 +2,9 @@
 
 # Getting started with the EchoFog desktop app
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 EchoFog is a peer-to-peer VPN that is hard to block, with free end-to-end encrypted chat and calls
 built in. This guide walks you through the desktop app, step by step. It takes about ten minutes.
 

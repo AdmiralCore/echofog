@@ -2,6 +2,9 @@
 
 # Run a node
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 EchoFog has no company servers. The network is the people who run it. If you have a VPS (a rented
 server with a public IP) or a home computer that stays on, you can help by running `echofog-node`,
 the headless node.

@@ -2,6 +2,9 @@
 
 # Anti-DPI: how the disguise works and where it stops
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 A censor's DPI box looks at a few things: which protocol a flow speaks, which site name (SNI) it
 asks for and whether that site really lives at that address, how the TLS greeting is built, what
 the server does when the censor connects to it himself, and the shape of the flow over time (how

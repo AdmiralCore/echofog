@@ -2,6 +2,9 @@
 
 # How EchoFog works
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 A plain-language tour for curious users and people who want to contribute. Each section is short
 and links to a deeper document where one exists.
 
