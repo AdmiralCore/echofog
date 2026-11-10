@@ -10,6 +10,8 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -114,6 +116,7 @@ func coverHTML() http.Handler {
 func startCover(t *testing.T, cert tls.Certificate, h http.Handler, tune func(*httptest.Server)) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(h)
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.EnableHTTP2 = true
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	if tune != nil {
@@ -294,16 +297,19 @@ func TestCoverDoctorCatchesDNSProblems(t *testing.T) {
 			resolve: func(context.Context, string) ([]netip.Addr, error) {
 				return []netip.Addr{netip.MustParseAddr("198.51.100.99")}, nil
 			},
+			adv:  "203.0.113.10",
 			want: servernode.LevelFail,
 		},
 		"no record": {
 			resolve: func(context.Context, string) ([]netip.Addr, error) { return nil, errors.New("no such host") },
+			adv:     "203.0.113.10",
 			want:    servernode.LevelFail,
 		},
 		"the address and others": {
 			resolve: func(context.Context, string) ([]netip.Addr, error) {
 				return []netip.Addr{netip.MustParseAddr("198.51.100.99"), netip.MustParseAddr("203.0.113.10")}, nil
 			},
+			adv:  "203.0.113.10",
 			want: servernode.LevelWarn,
 		},
 		"no advertised address": {
