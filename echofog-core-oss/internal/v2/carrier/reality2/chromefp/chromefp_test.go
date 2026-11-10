@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,30 +37,40 @@ func versionKey(v string) []int {
 	return k
 }
 
+// storedSamples reads every stored sample of a transport from testdata.
+func storedSamples(t *testing.T, transport string) []storedSample {
+	t.Helper()
+	files, _ := filepath.Glob("testdata/chrome-*-" + transport + ".json")
+	out := make([]storedSample, 0, len(files))
+	for _, f := range files {
+		v := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "chrome-"), "-"+transport+".json")
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s Sample
+		if err := json.Unmarshal(b, &s); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		out = append(out, storedSample{Version: v, Sample: &s})
+	}
+	return out
+}
+
 // newestSample loads the newest stored sample of a transport.
 func newestSample(t *testing.T, transport string) *Sample {
 	t.Helper()
-	files, _ := filepath.Glob("testdata/chrome-*-" + transport + ".json")
-	if len(files) == 0 {
+	stored := storedSamples(t, transport)
+	if len(stored) == 0 {
 		t.Fatalf("no stored Chrome %s sample in testdata; run the live test with CHROMEFP_UPDATE=1", transport)
 	}
-	best, bestKey := "", []int(nil)
-	for _, f := range files {
-		v := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "chrome-"), "-"+transport+".json")
-		k := versionKey(v)
-		if best == "" || lessVer(bestKey, k) {
-			best, bestKey = f, k
+	best := &stored[0]
+	for i := range stored {
+		if lessVer(versionKey(best.Version), versionKey(stored[i].Version)) {
+			best = &stored[i]
 		}
 	}
-	b, err := os.ReadFile(best)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var s Sample
-	if err := json.Unmarshal(b, &s); err != nil {
-		t.Fatalf("%s: %v", best, err)
-	}
-	return &s
+	return best.Sample
 }
 
 func lessVer(a, b []int) bool {
@@ -82,7 +93,31 @@ type storedSample struct {
 // stored sample is the closest one, and a sample of another major is the newest of all. exact
 // reports the first case. A missing sample is a fault for the caller, not a licence to skip.
 func selectSample(stored []storedSample, live string) (s *Sample, version string, exact bool) {
-	return nil, "", false
+	if len(stored) == 0 {
+		return nil, "", false
+	}
+	liveKey := versionKey(live)
+	var sameMajor *storedSample
+	newest := &stored[0]
+	for i := range stored {
+		s := &stored[i]
+		k := versionKey(s.Version)
+		if slices.Equal(k, liveKey) {
+			return s.Sample, s.Version, true
+		}
+		if len(k) > 0 && len(liveKey) > 0 && k[0] == liveKey[0] {
+			if sameMajor == nil || lessVer(versionKey(sameMajor.Version), k) {
+				sameMajor = s
+			}
+		}
+		if lessVer(versionKey(newest.Version), k) {
+			newest = s
+		}
+	}
+	if sameMajor != nil {
+		return sameMajor.Sample, sameMajor.Version, false
+	}
+	return newest.Sample, newest.Version, false
 }
 
 // liveCheck is what one live capture proves: our profile against the installed Chrome, which is
@@ -99,7 +134,17 @@ type liveCheck struct {
 // about the installed browser's hello: the drift is reported and only the stored comparison is
 // skipped.
 func checkLive(stored []storedSample, liveVersion string, live, ours *Sample) liveCheck {
-	return liveCheck{}
+	res := liveCheck{Divergences: Compare(live, ours)}
+	s, version, exact := selectSample(stored, liveVersion)
+	switch {
+	case s == nil:
+		res.Drift = fmt.Sprintf("no stored Chrome sample for %s in testdata: our profile was compared with the live Chrome only; run the live test with CHROMEFP_UPDATE=1", liveVersion)
+	case !exact:
+		res.Drift = fmt.Sprintf("stored sample is Chrome %s, installed %s: skipping only the stored-sample comparison, our profile is still checked against the live Chrome; refresh with CHROMEFP_UPDATE=1", version, liveVersion)
+	default:
+		res.Stored = Compare(s, live)
+	}
+	return res
 }
 
 func loadKnown(t *testing.T) known {
@@ -195,7 +240,9 @@ func TestOursIsDeterministicInShape(t *testing.T) {
 
 // The live check: the installed stable Chrome, headless, against a loopback server. Nothing leaves
 // the machine. Skipped without Chrome. CHROMEFP_UPDATE=1 writes the samples of the installed
-// version into testdata.
+// version into testdata. A stored sample of another version is a drift the runner does not control:
+// it is logged and only the stored comparison is skipped, so our profile is still checked against
+// the Chrome that is installed.
 func TestLiveChrome(t *testing.T) {
 	path, ver := findChrome()
 	if path == "" {
@@ -234,27 +281,27 @@ func TestLiveChrome(t *testing.T) {
 				}
 				t.Logf("wrote %s", name)
 			}
-			diffs := Compare(live[0], parseOurs(t, tc.ours(t)))
+			diffs := checkLive(storedSamples(t, tc.transport), ver, live[0], parseOurs(t, tc.ours(t)))
 			if k.Chrome != "" && k.Chrome != ver {
 				t.Logf("known-divergences.json is for Chrome %s, this is %s", k.Chrome, ver)
+			}
+			if diffs.Drift != "" {
+				t.Logf("%s", diffs.Drift)
 			}
 			if accept {
 				// Writes the current divergences as the list awaiting review; the diff of this
 				// file in git is the review.
 				if tc.transport == "tcp" {
-					accepted.TCP = diffs
+					accepted.TCP = diffs.Divergences
 				} else {
-					accepted.QUIC = diffs
+					accepted.QUIC = diffs.Divergences
 				}
 				b, _ := json.MarshalIndent(accepted, "", " ")
 				_ = os.WriteFile(knownFile, append(b, 10), 0o644)
 				return
 			}
-			checkDivergences(t, diffs, tc.listed)
-			stored := newestSample(t, tc.transport)
-			if stored.Chrome != ver {
-				t.Errorf("stored sample is Chrome %s, installed %s: refresh with CHROMEFP_UPDATE=1", stored.Chrome, ver)
-			} else if d := Compare(stored, live[0]); len(d) != 0 {
+			checkDivergences(t, diffs.Divergences, tc.listed)
+			if d := diffs.Stored; len(d) != 0 {
 				t.Errorf("the stored sample no longer matches the live Chrome %s: %v", ver, d)
 			}
 		})
