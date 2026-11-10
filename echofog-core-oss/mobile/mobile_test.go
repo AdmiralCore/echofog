@@ -130,6 +130,10 @@ func TestReality2DialWithoutGODEBUG(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer Stop()
+	// The canary has no GeoIP database (countryOf answers nothing), and the policy's "unknown" row
+	// keeps QUIC off (T6.4c), while this canary must prove reality2-quic without GODEBUG (T12.6).
+	// A known country puts the client on the foreign row, which allows the carrier.
+	cur.rt.SetCountry("DE")
 	out, err := Dial(`{"envelope":"` + hostCard + `"}`)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
