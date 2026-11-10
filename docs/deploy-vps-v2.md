@@ -27,9 +27,9 @@ docker compose -f deploy/v2/docker-compose.yml --env-file deploy/v2/.env exec no
 image, starts the node, waits for the healthcheck to report `healthy` and prints `v2 status --plain`, the
 path of the recovery phrase (`/data/recovery-phrase.txt` in the volume) and a ready invitation command.
 Add `--invites` for invitation links, `--cover node.example.org:443 --site /srv/echofog-site` for a
-public card, `--test` for a throwaway run on ports 8443 and 8444, and `--dry-run` to see every command
-first. Open 443/tcp and 443/udp in the firewall and in the provider's panel before expecting peers; the
-test run needs 8443 and 8444 instead.
+public card, `--test` for a throwaway run on the first free UDP pair from 8443, and `--dry-run` to see
+every command first. Open 443/tcp and 443/udp in the firewall and in the provider's panel before
+expecting peers; the test run uses its own ports instead.
 
 The rest of this guide is the same path with every step explained, and section 12 is the native
 installer.
