@@ -437,7 +437,7 @@ curl --proto '=https' --tlsv1.2 -fsSL -o install.sh https://example.org/install.
 sha256sum install.sh               # compare the value with the site and the README
 sh install.sh --fingerprint        # the same whole-file SHA-256, then the fingerprint of the key block
 ECHOFOG_RELEASE_URL=https://example.org/releases/v2 sh install.sh --preset relay --advertise 203.0.113.10
-systemctl status echofog-node      # the unit is written; --start also enables and runs the service
+systemctl status echofog-node      # the setup enabled and started the service; this is its state
 ```
 
 The first value that `--fingerprint` prints is the SHA-256 of the whole file, the one published on
@@ -445,7 +445,8 @@ the site and in the README; the second line is the fingerprint of the key block,
 [Release trust](release-trust.md) describes together with the `min_version` rule. The command is a
 cross-check and not a proof: a changed script can print anything, so the value to compare is the one
 from the site and the README. Run the installer as root: it creates the service user, the data
-folder and the systemd unit, and `--start` also enables and starts the service. A rollback to an
+folder and the systemd unit, then enables and starts the service. The `--start` flag belongs to the
+older `v2 install` command, and `v2 setup` neither takes it nor needs it. A rollback to an
 older version needs `--allow-rollback`, and only down to the signed `min_version`; below it, never.
 The script checks the signatures of `release.txt` (at least two of the three release keys) and
 compares the size and SHA-256 of the binary with that record; the setup starts only after that. Never
