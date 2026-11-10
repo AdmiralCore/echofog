@@ -2,6 +2,9 @@
 
 # Sending files
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 A file of up to 32 GiB (by default) goes from one contact to another peer to peer: directly over
 QUIC when the two can connect, through a relay circuit when they cannot. Nobody else, the relay
 included, can read or alter it. The code is in `echofog-core-oss/internal/services/filexfer`.

@@ -2,6 +2,9 @@
 
 # Operator API: your own payment and moderation
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 EchoFog has payment in TON built in, but you do not have to use it. If you run a node and want to
 take money your own way (a Telegram bot, a website with card payments, cash from friends) or just
 decide yourself who may use your node and for how long, use **passes**.

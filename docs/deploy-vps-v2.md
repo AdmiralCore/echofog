@@ -19,8 +19,12 @@ server.
 
 ## 2. Install with Docker
 
-The image is built from `deploy/v2/Dockerfile` and runs as an unprivileged user with a read-only file
-system and no capabilities.
+Run these commands from the `echofog-core-oss` folder of the repository. The compose file runs the
+published `ghcr.io/admiralcore/echofog-node:v2-dev` image, built by the node-image workflow from
+`deploy/v2/Dockerfile`; the `dev` and `latest` tags start the v1 node (`echofog-node run`) and are not
+used here. Pin a `sha-<commit>` tag when you want updates only on purpose. The container runs as an
+unprivileged user with a read-only file system and no capabilities; the profile is kept in the
+`echofog-v2-data` volume at `/data`.
 
 ```
 cp deploy/v2/.env.example deploy/v2/.env      # then edit it: set ECHOFOG_ADVERTISE_ADDR=203.0.113.10
@@ -42,8 +46,8 @@ and the noise3 port 444/udp, as `deploy/v2/docker-compose.yml` does.
 
 `deploy/v2/install.sh` downloads the binary over https and starts the node's own installer. **The trust
 root is the release public key block written inside `install.sh`.** The script checks the signatures of
-the signed release record (`release.txt`) with `ssh-keygen -Y verify` (two of the three release keys must
-sign it) and compares the size and SHA-256 of the binary with that record. The downloaded file becomes
+the signed release record (`release.txt`) with `ssh-keygen -Y verify` (at least two of the release keys
+must sign it) and compares the size and SHA-256 of the binary with that record. The downloaded file becomes
 executable and is started only after that; if any check fails, it is deleted and nothing is installed.
 The node's own installer (`echofog-node v2 setup`) then checks the binary once more against the signed
 manifest. With a terminal, `setup` shows the full-screen installer (presets, system check, one summary
@@ -76,16 +80,19 @@ installed. A deliberate rollback above the first two bounds needs `--allow-rollb
 warning. When the release keys are replaced, an old `install.sh` stops and asks for the new one; the
 procedure is in [release-trust.md](release-trust.md).
 
-The installer creates the system user `echofog`, the data folder `/var/lib/echofog` (mode 0700), a
-hardened systemd unit, and prints the commands that open the firewall. It does not change the
-firewall and does not start the service unless `--start` is given. Without `--preset` it asks the
-questions in the terminal (language, role, domain, site folder, port, address). With a domain the
-installer serves reality2-quic and reality2-tcp on the chosen port and noise3 on the next one, and
-writes the public card. Presets: `relay`, `exit-free` (shares this server's connection: the
-responsibility for that traffic stays with the operator), `home-entry`. The paid and private exits
-come later.
+The installer runs `echofog-node v2 setup`. It creates the system user `echofog`, the data folder
+`/var/lib/echofog` (mode 0700) and a hardened systemd unit, then enables and starts the service
+(`systemctl enable --now echofog-node`). It does not change the firewall by itself: it prints the
+commands that open the ports and runs them only with `--open-ports`. The `--start` flag belongs to
+the older `v2 install` command; `setup`, and therefore `install.sh`, does not accept it. Without
+`--preset` it asks the questions in the terminal (language, role, domain, site folder, port,
+address). With a domain the installer serves reality2-quic and reality2-tcp on the chosen port and
+noise3 on the next one, and writes the public card. Presets: `relay`, `exit-free` (shares this
+server's connection: the responsibility for that traffic stays with the operator), `home-entry`.
+The paid and private exits come later.
 
-Then start it: `systemctl enable --now echofog-node`.
+The service is already enabled and started by the installer; `systemctl status echofog-node` shows
+whether it is up.
 
 ## 4. First start and the recovery phrase
 
@@ -137,7 +144,14 @@ published.
 version, asks before installing it and never goes back to an older one. With Docker the image is
 updated by changing the tag and restarting the container.
 
-## 8. Troubleshooting
+## 8. Removing the node
+
+Without Docker, `echofog-node v2 uninstall --data /var/lib/echofog` stops the service and removes its
+systemd unit and the firewall rules it added. The profile is kept; add `--purge` and confirm to delete
+it too. With Docker, `docker compose -f deploy/v2/docker-compose.yml down` removes the container; the
+profile stays in the `echofog-v2-data` volume until you remove the volume.
+
+## 9. Troubleshooting
 
 - `doctor` reports the port in use: another process holds the UDP port; stop it or choose another port.
 - No peers connect: the firewall or the host's panel blocks the UDP port.

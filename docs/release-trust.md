@@ -9,8 +9,8 @@ installation path trusts. The step-by-step server guide is [deploy-vps-v2.md](de
 
 The root of trust of a server installation is the **release public key block inside `install.sh`**
 (between the lines `# BEGIN RELEASE KEYS` and `# END RELEASE KEYS`): three Ed25519 keys and a key epoch
-number. They are the same release keys that the application checks when it updates itself (two of the
-three must sign).
+number. They are the same release keys that the application checks when it updates itself (at least
+two of them must sign).
 
 - The script downloads `release.txt` (a short text record: version, `min_version`, key epoch, and the
   size and SHA-256 of every file; the epoch is the `key_epoch` line) and `release.txt.sigs` (armored signatures).
@@ -117,8 +117,9 @@ release keys", and no signed entry list is trusted. That is the intended fail-cl
 non-empty but malformed list does not silently become empty: the binary panics at startup with the
 offending key number, so a broken release build cannot ship.
 
-For 0.3.0 the built-in entry list is signed by one release key; the update manifest already requires two
-distinct release-key signatures. Moving the entry list to a 2-of-3 signature is planned after 0.3.0.
+For 0.3.0 the built-in entry list is signed by one release key; the update manifest already requires
+at least two distinct release-key signatures. Moving the entry list to a 2-of-3 signature is planned
+after 0.3.0.
 
 ## 6. Replacing the release keys
 

@@ -2,200 +2,149 @@
 
 # EchoFog FAQ
 
-Short, honest answers. If something here is unclear or seems wrong, please tell us.
+Short, honest answers for 0.3.0 (protocol v2). If something here is unclear or seems wrong, please tell
+us.
 
-## Is it a VPN or a messenger?
+## Is it a messenger or a VPN?
 
-Both, but the VPN comes first. EchoFog is a peer-to-peer VPN: you go online through other people's
-computers (exit nodes), not through a company's servers. Its transport is disguised as ordinary
-HTTPS to a real site, to make it hard to block. On top of that you get free end-to-end encrypted
-chat, groups and calls with screen sharing up to 4K at 60 fps. See [how-it-works.md](how-it-works.md).
+A messenger first. EchoFog is a peer-to-peer messenger for communities: groups with channels and voice
+rooms, calls, screen streams up to 4K60, files and offline delivery, with no server in the middle. Where
+the network is filtered, its connections are disguised as visits to an ordinary website. A VPN is built
+in as a second feature: you can go online through an exit someone gives you a link to, or share your
+own. See [How it works](how-it-works.md).
 
 ## Is it free?
 
-- **Chat, groups, calls and screen sharing:** free, no subscription.
-- **VPN:** depends on the exit. Anyone who shares their connection sets their own price per GB,
-  and it can be zero. Paid exits are paid in TON or USDT, and many give a little free test traffic
-  first. Blockchain transfers also cost a small network fee. See
-  [vault-payments.md](vault-payments.md).
+Yes. Chats, groups, voice rooms, calls, streams and files up to 64 GiB are free, with no subscription
+and no account. In 0.3.0 v2 exits are free too: they are shared by link, and 0.3.0 does not sell v2
+traffic. The app still carries the older v1 wallet and TON payments; the vault contract is on testnet
+and unaudited, and none of it pays for v2 traffic. There is no EchoFog token.
 
-## Who sees my traffic?
+## Who can read my messages?
 
-- **The exit operator** sees which sites and addresses you connect to. For HTTPS sites (the lock
-  in the browser) the content stays encrypted. For non-HTTPS traffic the exit can read and change
-  the content. The exit also knows your node ID and, usually, your IP address.
-- **Your Internet provider** sees encrypted traffic going to some address. The transport is
-  built to look like ordinary traffic (for example, HTTPS to a real site). The provider does not
-  see the sites you visit through the exit.
-- **Messages and calls** are end-to-end encrypted. A relay that carries them sees only
-  ciphertext.
+Only the people you write to. Messages, files and calls are end-to-end encrypted: a chat starts with
+PQXDH (X25519 together with the post-quantum ML-KEM-768) and continues with a double ratchet. Each
+member of a group gets your message over their own session. Relays and mailboxes that carry messages
+see only ciphertext.
 
-Pick exits you have reason to trust, and use HTTPS.
+One limit of 0.3.0: in a group call or a stream, the members who forward the stream to others (the call
+travels as a tree of the participants' own uplinks) can see it. They are members of the call anyway; no
+outsider can. Details in [SECURITY.md](../SECURITY.md).
+
+## Who sees my traffic when I use the VPN?
+
+- **The exit** sees which sites and addresses you connect to. HTTPS content stays encrypted; anything
+  without HTTPS the exit can read and change. The exit also sees your IP address, unless you reach it
+  through Tor or a proxy.
+- **Your Internet provider** sees encrypted traffic to the exit or to a relay. Across a filtered border
+  it looks like a browser visiting the node's own website.
+- **The sites you visit** see the exit's address, not yours.
+
+Use exits run by people you have reason to trust, and use HTTPS.
 
 ## Is it anonymous?
 
-Not by default. EchoFog makes it hard to see *what* you do and *that* you use a special protocol.
-Out of the box it does not hide your IP address from the nodes you connect to.
+Not by default. EchoFog makes it hard to see *what* you do and *that* you use a special protocol. Out of
+the box it does not hide your IP address from the nodes you connect to.
 
-- The sites you visit see the IP of the exit, not yours. But the exit sees yours.
-- When you talk to a contact directly, peer to peer, your computers can see each other's IP
-  addresses. For calls, the route is yours to pick (*Settings* → *Tor and proxy* → *Calls*):
-  *Direct* shows your address to the person you call, *Through a relay* shows it only to the relay,
-  and *Automatic* goes through a relay when Tor or guards are on.
-- *Tor and proxy* sends the app's own traffic through Tor or another SOCKS5 proxy, so the EchoFog
-  network does not see your IP.
-- *Anonymous mode* makes sure nothing in the app shows your address: *Through Tor* (nobody in the
-  network sees it) or *Only my relay* (only your own relay does). Calls and files then go through
-  relays. See [Anonymous mode](getting-started.md#anonymous-mode).
-- Even then, the hosting of your relay knows who pays for it, and how and when you write can give
-  you away.
-- Public nodes (relays and exits) are listed in the network's shared directory (the DHT), so a
-  censor who crawls it can find them.
-- Payments go through the TON blockchain, which is public.
+- When you talk to a contact directly, your computers see each other's address. For calls you can pick
+  the route in *Settings* → *Tor and proxy*: *Direct* shows your address to the person you call,
+  *Through a relay* shows it only to the relay.
+- *Tor and proxy* can send all of the app's own traffic through Tor or another SOCKS5 proxy. Then the
+  EchoFog network does not see your address, and the app does not punch through routers or announce
+  your address.
+- Hidden nodes are not listed in the network's shared directory (the DHT) and answer only invitation
+  links. Public nodes are listed, so a censor who crawls the DHT can find them.
+- How and when you write can still give you away.
+
+A stricter mode, where everything goes only through your own pinned relays, comes after 0.3.0.
 
 ## Is it safe to use in a censored country right now?
 
-Honestly, we do not know yet. EchoFog is experimental. It has not had an independent security
-audit by a specialist organization, and it has not been tested against a real national DPI. The
-whole-computer mode has a kill switch, on by default, but it does not cover everything yet: if its
-helper process is killed or Windows removes the EchoFog adapter, the normal connection comes back,
-and DNS is kept inside the tunnel only on a best-effort basis. If being caught is dangerous for you,
-do not rely on it yet. See
-[anti-dpi.md](anti-dpi.md) and [SECURITY.md](../SECURITY.md).
+We do not know yet, and we will not pretend otherwise. EchoFog 0.3.0 is experimental. It has not had an
+independent security audit, and it has not been tested inside a real national censorship system. If
+being caught is dangerous for you, do not rely on it yet.
 
-What we can say: in our lab, with a program that reads traffic the way GFW and TSPU are known to,
-every VPN tunnel to an exit looked like an ordinary HTTP/3 or HTTPS visit, and
-with UDP blocked the VPN came up in under a second. The traffic between nodes still looks like
-random bytes, which is easier to flag. A real censor may check things our lab does not.
+What our lab shows: the disguised QUIC link was not flagged by any of the lab's detectors, and probing a
+node without its secret token reaches only the node's website. What it does not show yet: that the TCP
+disguise is indistinguishable from a browser (record sizes and timings still differ), anything about
+China or Iran, and behaviour in real Russian mobile networks. See [Anti-DPI](anti-dpi.md) and
+[SECURITY.md](../SECURITY.md).
 
-## Does the disguise slow the VPN down?
-
-Barely. On one computer, one stream carried 40 MB/s over plain QUIC and 37 MB/s with the disguise
-(the older random-looking obfuscation: 31 MB/s). The padding against inner-handshake detection
-covers only the first few kilobytes of each connection.
-
-What you will notice more is the exit's own limit: a free exit gives each client up to 50 Mbit/s
-by default (about 6 MB/s), so that one person cannot take the whole connection. The operator can
-change it, and paying clients are not limited. Calls do not go through the exit, so this limit
-does not touch them.
-
-## What happens if I share my connection?
+## What happens if I share my connection as an exit?
 
 Other people's traffic goes out to the Internet **from your IP address**. To websites, and to the
-police, it looks like it came from you. Legal responsibility for that traffic is yours, so only
-share a connection you are allowed to share.
+police, it looks like it came from you. Legal responsibility for that traffic is yours, so share only a
+connection you are allowed to share.
 
-Some protection is built in. Every exit, public or hidden, refuses to connect to:
+The app keeps this narrow by default:
 
-- your own computer, your local network and private or reserved address ranges;
-- ports used for sending mail (25, 465, 587), so your IP does not end up on spam blocklists;
-- Windows file-sharing and RPC ports (135, 137-139, 445) and SSDP (1900), which are common
-  targets for scanning and worms.
+- only the people you choose can connect; access for "anyone with the link" is a separate switch with a
+  term, and you can revoke it;
+- a new request waits for your confirmation, and sharing is off again after every restart;
+- the exit refuses connections to your own computer and local network, to private and reserved
+  addresses, to mail-sending ports (25, 465, 587) and to Windows file-sharing ports (135, 137–139, 445)
+  and SSDP (1900).
 
-Everything else goes through. A public exit is published to the network so others can find it; a
-hidden one is not, and serves only the people you give a link to (see
-[Hidden and isolated nodes](hidden-nodes.md)). Your own log can contain technical errors from connections that failed, with IP addresses masked. More in [run-a-node.md](run-a-node.md).
+See [Getting started](getting-started.md#share-your-own-exit).
 
 ## Can someone overload or attack my node?
 
-They can try, and the node defends itself. Making a new identity is free, so it counts addresses
-as well: at most so many peers and identities from one address or subnet, bans for peers that
-misbehave, a proof of work for strangers on a server, budgets so that a small request never makes
-the node send a lot, and limits on what anyone can take from the relay and the exit. On a VPS the
-server role also turns off chat, calls and file transfer, which a relay does not need. What no node
-can stop on its own is a flood bigger than its connection: that needs the provider's DDoS
-protection. Details in [Protecting a node](node-security.md).
-
-## Why TON? Is there a token?
-
-There is **no EchoFog token**. Payments use TON and USDT on the TON network, because transfers
-there are fast and cheap, and a small contract (your deposit) lets you pay per megabyte without a
-network fee for every payment. You need no account: your wallet is created from your recovery
-phrase.
-
-## Is there a commission?
-
-No. The project takes nothing from payments: the exit gets its full price.
-
-There is an optional, voluntary tip. When a build has a project address set, the Wallet screen
-shows *Support the project*: a share (*Off*, 5% or 10%; 5% unless you change it) added **on top
-of** what you pay exits. You can switch it *Off* with one click, and the service does not change.
+They can try, and the node defends itself: caps per address and per subnet, a proof of work for
+strangers, limits on what anyone can take from a relay, an exit or a mailbox, bounded tables, and bans.
+What no node can stop on its own is a flood bigger than its connection: that needs the provider's DDoS
+protection. See [Protecting a node](node-security.md).
 
 ## Why does it say my computer cannot be reached from the Internet?
 
-Your router or provider does not let other computers connect to you directly — usually because of
-NAT, where your router shares one public address among your devices. **Chats, calls and the VPN
-still work** as long as a relay is in reach (see the next question). It only matters if you want to serve others as a relay or a public exit. A hidden
-exit for your own people works without it, through relays. See
-[reachability.md](reachability.md).
+Your router or provider does not let other computers connect to you directly, usually because of NAT.
+**Chats, calls and the VPN still work**: the app punches through home routers, including the hard
+symmetric kind, and uses a relay when that fails. It matters only if you want to serve others as a
+public relay or exit. See [Reachability](reachability.md).
 
-## I joined a group and see nothing / my call does not connect
+## How do I get into the network the first time?
 
-Most likely the two devices cannot reach each other: both are behind routers or mobile networks that
-hole punching cannot pass, and no relay is connected. Then nothing goes between them — not the join
-request, not the keys, not the call — and the app says *No way to the recipient right now* or *No
-member of the group can be reached yet*. Turning on UPnP on one of the routers usually fixes it; a
-relay in the network always does. Meanwhile a group file (.fogzip) shows the group's history. See
-[Groups](groups.md#when-nothing-arrives) and [Reachability](reachability.md#when-both-sides-are-hard-to-reach).
+The released app has a small, signed list of entry nodes built in, so it connects on its own. You can
+also add your own entries, or turn the built-in ones off, in *Settings* → *Network* → *Entry nodes*. An
+invitation link from a contact or a group works as an entry too. A build from source has no built-in
+list: it connects through the links you open.
 
 ## What is a .fogzip file?
 
-A group saved to a file by one of its members: the invitation and the group's history (members,
-roles, channels, threads, messages), sealed with a password. Opening it (Ctrl+L → *Open a group
-file*) shows the group at once, even with nobody online, and joins it as the link does. Each message
-in it is signed by its author, so the file cannot be altered on the way. See
-[Groups](groups.md#the-group-file-fogzip).
+A group saved to a file by one of its members: the invitation and the group's history, sealed with a
+password. Opening it shows the group at once, even with nobody online, and joins it as the link does.
+Every message in it is signed by its author, so the file cannot be altered on the way.
+
+## What does the app keep on my computer?
+
+- **The database** (messages, contacts, groups, keys) is encrypted with a key unlocked by your
+  password or recovery phrase.
+- **Connection settings** live in `ui_settings.json` next to the database as ordinary JSON (file mode
+  0600): anonymous mode, the proxy, pinned guard relays, entry nodes, the kill switch, the call route
+  and the protocol. The file holds no message text, names, keys or tokens, but it shows how the app
+  was set up and which relays and nodes it was told to use.
+- **Files you receive or save** are ordinary, unencrypted files in your download folder. The system
+  viewer, previews, indexing, backups and anyone who can read the folder can see them. An encrypted media
+  store is planned after 0.3.0.
+- **Logs and `crash.log`** are plain text with technical events. They do not contain message text,
+  contact or group names, keys, tokens or the recovery phrase, and IP addresses are masked. A rare
+  storage or group error path can still write a full device or group ID, and a failed connection can
+  leave its host name. Check a log before you share it anyway.
+- **Emergency lock** erases the decrypted keys from memory, stops the node and the VPN and closes the
+  app. It is a lock, not a wipe: what is already on disk stays, and the profile opens again with your
+  password.
+- **Screenshots and screen recording** are not blocked by the app.
+- There is no analytics and no automatic crash reporting: a crash report is built only when you open
+  it, and you post it yourself.
+
+## Where is the VPN market, payment in TON, the wallet?
+
+Not for v2 in 0.3.0. The v2 exit market, paid v2 exits and operator clusters come in later updates.
+Until then v2 exits are free and shared by link. The Wallet screen is the older v1 wallet for TON; the
+vault contract is on testnet and unaudited, and the wallet does not pay for v2 traffic.
 
 ## The app closes right after I type my password
 
-That used to happen when the database was damaged by a power cut or a crash while it was saving.
-The app now repairs such a database at the start (and keeps a copy of it beside it); what the damage
-reached may be missing. If it still closes, the reason is in `crash.log` next to the log
-(`%LOCALAPPDATA%\EchoFog` on Windows): please send it to us.
-
-## Can I run my own private node for friends?
-
-Yes.
-
-- **Private relay.** Run `echofog-node` on a server with `--relay-private` and list your friends'
-  peer IDs in `--relay-allow`. A private relay is not advertised and serves only those people.
-  Their nodes reach it by its address (`--relays host:port/<peer id>`). See
-  [run-a-node.md](run-a-node.md).
-- **Free VPN for friends.** In the app, open *Proxy* → *Share your connection* and add your
-  friends under *Free for these people*. They never pay, whatever your price. They connect with
-  *Specific node* and the link you give them. On its own this keeps the exit public: everyone else
-  can find it and gets your normal price.
-- **A VPN only for your people.** Switch *Proxy* → *Access to this computer* to **Hidden** (or run
-  a server node with `--access isolated`). Your exit then disappears from the network and answers
-  only the people you send its invitation link to. Step by step, in plain words:
-  [Hidden and isolated nodes](hidden-nodes.md).
-
-## What does the app log and keep?
-
-- **Your profile** lives in the `.echofog/profiles` folder in your home folder. Messages, contacts,
-  groups and keys are stored encrypted with a key unlocked by your password.
-- **Interface settings** are kept in `ui_settings.json` next to the database as ordinary JSON that
-  only your user can read: anonymous mode, proxy, pinned guard relays, bootstrap nodes, the kill
-  switch, the access mode, relay settings, the call route and the protocol. The file carries no
-  message text, names, keys or tokens, but it shows how the app was set up and where it connects.
-- **Files you receive** are written as ordinary files to the download folder (`Downloads/EchoFog`
-  unless you chose another). They are not encrypted: the system file viewer, previews, indexing,
-  the Recycle Bin, backups and anyone who can read the folder can see them. A file you save from
-  the app goes wherever you choose and is not encrypted either.
-- **Logs** go to `echofog.log` in the app's cache folder (on Windows,
-  `%LOCALAPPDATA%\EchoFog`). The file is capped at 8 MB, plus one previous file. They are plain
-  text: passwords, keys and the recovery phrase are blanked out, IP addresses are masked and
-  identifiers are shortened in most lines (a rare storage or group error can include a full device
-  or group identifier, and a failed connection error can include a host name). They hold technical
-  events, not the text of messages or contact and group names. Check a log before you share it.
-- **`crash.log`** next to the log is plain text too: a technical crash trace, not your messages.
-- **Emergency lock** (in *Settings*: type `LOCK`, then press *Lock now*) erases the decrypted keys
-  from memory at once, stops the node and the VPN and closes the app, so no key or open message
-  stays in it. It is a lock, not a wipe: everything already on disk stays, including received
-  files, logs, `crash.log` and the wallet file. The profile opens again with your password or
-  recovery phrase.
-- **Screenshots and screen recording** are not blocked by the app.
-- **The wallet asks before larger sends**, and small sends add up: see
-  [Getting started](getting-started.md#4-paying-for-traffic).
-- There is no analytics or crash reporting, and the app does not upload logs. Logs leave your
-  computer only if you copy or save them and send them yourself.
+If the database was damaged by a power cut or a crash, the app repairs it at the next start and keeps a
+copy beside it; what the damage reached may be missing. If it still closes, the reason is in
+`crash.log` next to the log (`%LOCALAPPDATA%\EchoFog` on Windows): please send it to us.

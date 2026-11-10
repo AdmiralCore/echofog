@@ -2,6 +2,9 @@
 
 # "This computer cannot be reached from the Internet"
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 You may see this on the **Relay** card in the **Proxy** screen. Short answer first: **chats, calls
 and using the VPN all work anyway.** Being reachable only matters if you want to serve others as a
 relay or a public exit. To share your connection with a few people of your own, you do not need it:

@@ -2,199 +2,162 @@
 
 Русская версия: [README.ru.md](README.ru.md)
 
-**A peer-to-peer VPN that is hard to block.** There is no company in the middle: you go online
-through other people's computers, and anyone can run a node and set their own price. The connection
-is disguised as an ordinary browser visiting an ordinary HTTPS site, so a censor's deep-packet
-inspection has little to single out.
+**A peer-to-peer messenger for communities that keeps working where others are blocked.** Groups with
+channels and voice rooms, calls, screen streams up to 4K at 60 fps, files and offline delivery, with no
+server in the middle that anyone can switch off. Messages and calls are end-to-end encrypted. Where the
+network is filtered, the connection is disguised as an ordinary visit to an ordinary website.
 
-<p align="center"><a href="https://github.com/AdmiralCore/echofog/releases/download/v0.1.0/demo.mp4"><img src="https://github.com/AdmiralCore/echofog/releases/download/v0.1.0/demo.gif" alt="EchoFog desktop: connecting through a P2P exit, an end-to-end encrypted chat with a 4K60 call, and the TON wallet" width="960"></a></p>
+A VPN is built in as a second feature: go online through an exit that a friend or an operator runs, or
+share your own. Exits are how node operators earn in later releases. In 0.3.0 they are free and shared
+by link; paid v2 exits come later.
 
-As a bonus, EchoFog includes free end-to-end encrypted chat and group calls with screen sharing up
-to 4K60 — no subscription, no central server. Payments for traffic are in TON, with no account and
-no commission.
+> **Status: 0.3.0, the first release on protocol v2. Experimental.** It works end to end in our lab and
+> test networks, but it has **not** had an independent security audit, and it has **not** been tested
+> inside a real national censorship system yet. Do not rely on it where your safety depends on it.
+> Testing and feedback, especially from inside filtered networks, are what the project needs most now.
+> What is and is not protected: [SECURITY.md](SECURITY.md).
 
-> **Status: experimental.** EchoFog works end to end in the lab and in a Dockerised test network,
-> but it has **not** had an independent security audit by a specialist organization yet, and it has
-> **not** yet been tested against a real national DPI. Do not rely on it to protect you in a
-> high-risk situation yet. Testing and feedback — especially from inside censored networks — are
-> exactly what the project needs now. See [SECURITY.md](SECURITY.md) for what is and is not
-> protected.
+## What you can do with it
+
+- **Communities without a server.** A group is a space with text channels, categories, threads, roles
+  and per-channel permissions, invitations with a term, join requests, slow mode and bans. Its history
+  lives on the members' devices, signed by its authors.
+- **Talk.** Direct chats with replies, threads, reactions, edits, pins, mentions and saved messages.
+  Voice rooms you join with one click, calls one to one and in groups, and screen streams up to 4K60
+  that travel over trees of the viewers' own uplinks, so a stream reaches many people without a server.
+- **Files and voice messages.** Files up to 64 GiB by default, resumed after a break, delivered into
+  the group, channel and thread they were sent to.
+- **Offline delivery.** A message to someone who is offline waits in an encrypted mailbox for up to
+  7 days. The app shows the state of a message: *waiting for delivery*, *waiting at a relay*,
+  *delivered*.
+- **A VPN when you need one.** Paste a link to an exit and go online through it, as a local SOCKS5 proxy
+  or for the whole computer with a kill switch (Windows and Linux). Turn your own computer into an exit
+  for the people you choose.
+- **Run a node.** One command installs a server node with a full-screen setup: presets, a system check,
+  autostart, a link and a QR code at the end. A node can relay, keep mailboxes, serve as an exit and
+  hold the camouflage site.
 
 ## Documentation
 
 | If you want to… | Read |
 |---|---|
-| use the desktop app: install, VPN, contacts, calls | [Getting started](docs/getting-started.md) |
-| get quick, honest answers (safety, logs, legal risk of sharing) | [FAQ](docs/faq.md) |
-| run a node on a server or at home | [Run a node](docs/run-a-node.md) |
-| look up any `echofog-node` command or flag | [Node command line](docs/node-cli.md) |
-| put a node on a VPS with Docker, step by step | [VPS with Docker](docs/deploy-vps.md) |
-| protect a public node from floods, fake identities and abuse | [Protecting a node](docs/node-security.md) |
-| run an exit only for the people you invite | [Hidden and isolated nodes](docs/hidden-nodes.md) |
-| take payment your own way (a bot, a site) and give each person a link with a term | [Operator API](docs/operator-api.md), [pass bot](echofog-core-oss/deploy/tg-bot/README.md) |
-| fix "this computer cannot be reached from the Internet" | [Reachability](docs/reachability.md) |
-| understand how it works under the hood | [How it works](docs/how-it-works.md) |
-| configure the anti-DPI disguise of a public node | [Anti-DPI](docs/anti-dpi.md) |
-| understand paying for traffic with a TON vault | [Vault payments](docs/vault-payments.md) |
+| install the app, add contacts, create a space, call | [Getting started](docs/getting-started.md) |
+| set up a space: channels, roles, invitations, moderation | [Groups and spaces](docs/groups.md) |
 | send files to contacts and groups | [File transfer](docs/file-transfer.md) |
-| set up a space: channels, roles, invitations, moderation, the group file | [Groups and spaces](docs/groups.md) |
-| understand how group messages are encrypted and caught up on | [Group encryption](docs/group-encryption.md) |
+| get short, honest answers (safety, logs, legal risk) | [FAQ](docs/faq.md) |
+| run a node on a VPS | [VPS with protocol v2](docs/deploy-vps-v2.md), [Node command line](docs/node-cli.md) |
+| check that an installer or a release is genuine | [Release trust](docs/release-trust.md) |
+| run an entry inside Russia or Iran | [Domestic entry](docs/domestic-entry.md) |
+| use the kill switch | [Windows](docs/kill-switch-windows.md), [Linux](docs/kill-switch-linux.md) |
+| understand the disguise and what it does not hide | [Anti-DPI](docs/anti-dpi.md) |
+| read the protocol | [Protocol v2](docs/protocol/v2/README.md) |
 | know the security status, or report a vulnerability | [SECURITY.md](SECURITY.md) |
 
-Every document has a Russian version next to it (`*.ru.md`).
+Every user document has a Russian version next to it (`*.ru.md`). Documents about protocol v1 are being
+replaced; where a page still describes v1, it says so at the top.
 
 ## How it works, in short
 
-- **No central server.** Nodes find each other through a DHT. They connect directly when their
-  routers allow it, punch through home routers with the help of signaling nodes, and fall back to a
-  relay when nothing else works.
-- **Hard to block.** To a censor, the connection to an exit looks like Chrome opening a real site
-  next to the exit's server: HTTP/3 over QUIC, or HTTPS over TCP when UDP is blocked. The app tries
-  both at once and keeps whichever gets through. A censor that connects to the node himself, without
-  the secret token, lands on that real site. A node can also sit behind a CDN over WebSocket.
-- **The VPN.** A local SOCKS5 proxy for apps, or the whole computer through a tunnel (on Windows
-  the Wintun driver is built in). Exits compete on an open market; the app can pick one
-  automatically by ping, price, speed and which of your sites open through it. An exit can also
-  stay hidden and serve only the people it gives an invitation link to. A link also comes in an
-  https form that messengers make tappable: the page opens it in the app or offers the download.
-  In whole-computer mode a kill switch, on by default, keeps apps offline when the exit drops.
-- **Messages and calls.** End-to-end encrypted (X3DH + Double Ratchet; a chat starts with
-  post-quantum hybrid PQXDH, ML-KEM-768). Replies, threads, edits, reactions and pins work in
-  every chat, and a chat looks the same on both sides after a break.
-  A group can be a space with text channels and voice rooms, like a community server without the
-  server. Pictures arrive with a small preview, so you see them before downloading. Calls and screen
-  sharing travel over relay trees sized by each participant's upload, which is how a stream reaches
-  many viewers without a central server. On Windows the app captures and encodes the screen itself
-  on the graphics card, so a shared screen keeps up with the monitor: up to 144 fps at 1080p and
-  1440p, with the computer's sound but not the call's. A viewer can put the sharer's camera over the
-  screen, and both sides see the stream's stats while it runs.
-- **Hiding your address.** By default (`auto`), a user's node in a censoring country joins the
-  network through two or three camouflaged guard servers, and you can pin your own relay as one.
-  The app's own traffic can go through Tor or another SOCKS5 proxy, and calls can be set to go
-  direct or only through a relay. Anonymous mode goes further: everything through Tor, or through
-  your pinned relay alone. See [Getting started](docs/getting-started.md) and
-  [Anti-DPI](docs/anti-dpi.md).
-- **When something breaks.** *Logs* → *Connection report* gathers what the app knows about its
-  connection, with no address or ID, for you to post. A crash is written to `crash.log` next to
-  the log, and a database damaged by a power cut is repaired at the next start.
-- **Payments.** You keep TON in your own small vault contract and sign vouchers as you use an
-  exit; the exit collects them every few hours. Paying by a direct TON or USDT transfer also works.
-  For now the wallet runs on the TON testnet: payments use test coins, and USDT is not there yet.
-  A node owner can also take payment their own way (a bot, a site) and give each person a pass
-  with a term: [Operator API](docs/operator-api.md), [pass bot](echofog-core-oss/deploy/tg-bot/README.md).
+- **No central server.** Nodes find each other through a DHT and peer exchange. They connect directly
+  when the routers allow it, punch through home routers (including symmetric NATs), and use another
+  node as a relay when nothing else works. A relay sees only ciphertext.
+- **End-to-end encryption.** A chat starts with PQXDH, a post-quantum hybrid (X25519 and ML-KEM-768),
+  and continues with a double ratchet. Each member of a group gets messages over their own session.
+  Calls are encrypted inside these sessions; in 0.3.0 the members who forward a stream to others in a
+  call can see it (details in [SECURITY.md](SECURITY.md)).
+- **Hard to block.** Across a filtered border, the connection looks like a browser opening the node's
+  own website over HTTP/3, or over HTTPS when UDP is blocked. A censor who connects to the node without
+  the secret token gets that website. Each country has a route policy: for example, in Russian mobile
+  networks the app goes through an entry inside the country, and a connection that freezes after about
+  16 KB is marked and avoided. Between peers, where nothing filters, traffic is plain random-looking UDP.
+- **Your address.** Hidden nodes stay out of the DHT and answer only invitation links. The app's own
+  traffic can go through Tor or another SOCKS5 proxy, and calls can be set to go only through a relay.
 
-The longer version is in [How it works](docs/how-it-works.md).
+The longer version: [How it works](docs/how-it-works.md).
 
-## What a node defends itself against
+## What we have measured, and what not yet
 
-| Threat | What the node does |
-|---|---|
-| DPI recognising the protocol | Chrome-shaped QUIC and TLS with the name of a real neighbouring site; the first kilobytes of every tunnel padded so the browser's own handshake inside does not show; connections rotated so no single one runs for an hour carrying gigabytes ([Anti-DPI](docs/anti-dpi.md)) |
-| A censor probing the node | without the token, a probe reaches the real site and sees its certificate and pages; an ordinary node stays silent; a replayed, altered or copied handshake counts as a probe |
-| UDP blocked or throttled | QUIC and TCP are dialed together; a QUIC link that connects and then goes silent is moved to TCP; the winner is remembered per network, across restarts |
-| Russia's TSPU freezing a TCP link after about 16 KB | the TCP fallback is carried by short connections, each replaced before it has carried 12 KB; by default across the border from Russia and where a link froze (`anti_dpi.tcp_rotate`, `--tcp-rotate`, [Anti-DPI](docs/anti-dpi.md#russias-16-kb-freeze)) |
-| Connection floods and free fake identities | caps per address and per subnet, a QUIC Retry and a small proof of work for strangers, bans that survive a restart |
-| A small request that makes the node send a lot | node-wide budgets for speed probes and peer lists |
-| Filling its disk or memory | quotas and expiry for offline mail, DHT records and handed-out keys |
-| One user taking the whole relay or exit | per-peer and per-address limits; a free exit gives each client up to 50 Mbit/s by default, and can cap the MB per client and per address a day and the GB of the whole exit a month (`--exit-free-mb-per-day`, `--exit-free-ip-mb-per-day`, `--exit-free-gb-per-month`; off by default) |
-| Fake payments keeping it busy | unknown vaults checked at most every 10 s per peer |
-| Being found at all | hidden and isolated nodes stay out of the DHT and answer only invitation links ([Hidden nodes](docs/hidden-nodes.md)) |
-
-What no node can stop by itself: a flood bigger than its uplink, an attacker with thousands of real
-addresses, and a censor who crawls the DHT for the addresses of public nodes. Only a link to a
-camouflage node is disguised. In guard mode (default `auto`: on in a censoring country, or while
-the country is not known) a user's node crosses the border only to camouflaged guards. The older
-random-looking obfuscation, which a GFW-style rule can flag, is still used between servers, on the
-local network, inside one country with `region_aware_obfs`, and on a user's node whose guard mode
-is off (or `auto` in a country that does not censor). Details:
-[Protecting a node](docs/node-security.md), [SECURITY.md](SECURITY.md).
-
-## Measured in the lab
-
-From the Docker test network (`echofog-core-oss/testbed`), three runs in a row on 27 October 2026.
-A program playing the censor read the traffic at every border while three clients used the VPN for
-three minutes (about 2 GB) and a browser visited the imitated site for comparison. This is a lab,
-not a real national DPI.
+From our lab, not from a real national censor:
 
 | Measurement | Result |
 |---|---|
-| EchoFog bytes a GFW-like rule set would flag | 0.0 / 0.0 / 0.1% (on 25 October, before the QUIC disguise: 100%) |
-| VPN tunnels to the exit read as ordinary HTTP/3 or HTTPS | all; 5 small mesh links to the exit and 15 to other nodes still look like noise |
-| VPN moved to another exit during a run | never |
-| HTTPS visits through the VPN given away by the inner handshake | 0 of 24 |
-| First page through the VPN with UDP dropped at the border | 0.7 s (before the QUIC/TCP race: 37 s) |
-| 300 MB in one stream while connections rotate; 72 downloads at once | whole; 72 of 72 |
-| One stream over loopback, plain QUIC / disguised / random-looking | 40 / 37 / 31 MB/s |
-| One client through a free exit | 50 Mbit/s, the exit's default per-client limit |
+| Disguised QUIC link (reality2-quic) against the lab's detectors: fingerprint, SNI, SNI vs address, flow shape | 0 flags |
+| Active probes of a node (replay, altered handshake, cover check, token) | 0 answers that give the node away |
+| Screen stream 1440p60, 1440p144, 2160p60, direct and through a relay, against protocol v1 | same frame rate, 0 % loss |
+| Voice in a room of 5, p95 delay | 135 ms (v1: 136 ms) |
+| Relay of a voice room cut off without warning | listeners back in 0.7 s |
 
-How each number is taken, and what is still missing: [Anti-DPI](docs/anti-dpi.md#measurements).
+Not proven yet, and therefore not promised: that the TCP disguise is indistinguishable from a browser
+(record sizes and timings still differ, and in our lab the ws2 TLS fingerprint stands out), anything
+about China or Iran, and behaviour in real mobile networks of Russia. These are the next lab and field
+tasks.
 
 ## Repository layout
 
-This is a Go workspace (`go.work`) with two modules:
+A Go workspace (`go.work`) with two modules:
 
 | Folder | Module | What it is |
 |---|---|---|
-| [`echofog-core-oss/`](echofog-core-oss/) | `github.com/echofog/echofog-core` | the node: transport, crypto, NAT traversal, DHT, messaging, calls, proxy, payments, and the headless `echofog-node` binary for servers |
+| [`echofog-core-oss/`](echofog-core-oss/) | `github.com/echofog/echofog-core` | the node: transport, crypto, NAT traversal, DHT, messaging, calls, files, VPN, and the `echofog-node` server binary. Protocol v2 lives in `internal/v2/` |
 | [`echofog-desktop-oss/`](echofog-desktop-oss/) | `github.com/echofog/echofog-desktop` | the desktop app (Wails: Go + WebView, Svelte front-end); the node runs inside it |
 
-The desktop module uses the core through a `replace` directive pointing at `../echofog-core-oss`,
-so the two folders must stay side by side.
+The desktop module uses the core through a `replace` directive pointing at `../echofog-core-oss`, so
+the two folders must stay side by side.
 
 ## Build from source
 
-You need **Go 1.27.3+**. For the desktop app you also need **Node 18+** and the
-[Wails CLI](https://wails.io).
+You need **Go 1.27.3+**. For the desktop app also **Node 18+** and the [Wails CLI](https://wails.io).
 
-Headless node:
+Server node:
 
 ```bash
 cd echofog-core-oss
-make build                       # -> bin/echofog-node
-./bin/echofog-node init          # create an identity, print the recovery phrase
-./bin/echofog-node run --bootstrap host:port/<peer id>
+make build                         # -> bin/echofog-node
+./bin/echofog-node v2 init         # creates the node and its settings; no release keys needed
 ```
 
-What the flags mean, which ports to open and how to run it in Docker are in
-[Run a node](docs/run-a-node.md).
+The full-screen `v2 setup` and `v2 update` are part of a release build: they verify a signed release
+manifest and fail closed without the release keys compiled in. To install a released node on a
+server, use the signed `install.sh`, which starts `v2 setup` after its own checks:
+[VPS with protocol v2](docs/deploy-vps-v2.md).
 
 Desktop app:
 
 ```bash
 cd echofog-desktop-oss
-wails build                      # -> build/bin/EchoFog(.exe)
-wails dev                        # live reload against the real core
+wails build                        # -> build/bin/EchoFog(.exe)
+wails dev                          # live reload against the real core
 ```
 
 > The Wails v2.11.0 CLI must be built with a recent `golang.org/x/tools` to work under Go 1.27
 > (otherwise it fails with `package "context" without types`). Install it with
-> `GOTOOLCHAIN=go1.27.3 go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0` on a machine
-> whose module cache already has `x/tools` ≥ v0.52.
+> `GOTOOLCHAIN=go1.27.3 go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0` on a machine whose
+> module cache already has `x/tools` ≥ v0.52.
 
 Tests:
 
 ```bash
 cd echofog-core-oss
-make test                        # unit and integration tests
-make test-calls                  # a 10-node call cluster over QUIC
-make testbed-chaos               # ten nodes behind NATs in Docker, with crashes and cuts
+make test                          # unit and integration tests
+make test-race                     # the same under the race detector
+make testbed                       # the Docker test network
 ```
 
 ## Contributing and feedback
 
-Bug reports, test results from censored networks and pull requests are welcome.
+Bug reports, test results from filtered networks and pull requests are welcome.
 
-- **A bug, or a test from a censored network** (whether it works or not): open an [issue](https://github.com/AdmiralCore/echofog/issues/new/choose) and pick the form.
-- **A question or an idea**: start a [discussion](https://github.com/AdmiralCore/echofog/discussions). Vote with 👍 for the ideas you want.
-- **Chat and quick help**, mostly in Russian: the [community group](https://t.me/+3N3EKWXi-ow3MzBi) on Telegram. News: the [Telegram channel](https://t.me/EchoFogDev).
+- **A bug, or a test from a filtered network** (whether it works or not): open an
+  [issue](https://github.com/AdmiralCore/echofog/issues/new/choose) and pick the form.
+- **A question or an idea**: start a [discussion](https://github.com/AdmiralCore/echofog/discussions).
+- **Chat and quick help**, mostly in Russian: the [community group](https://t.me/+3N3EKWXi-ow3MzBi) on
+  Telegram. News: the [Telegram channel](https://t.me/EchoFogDev).
 - **A security problem**: report it privately, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-EchoFog is licensed under the [Mozilla Public License 2.0](LICENSE) (MPL-2.0): changes to
-EchoFog's own files must stay open under the same license when you distribute them, while the code
-can be combined with code under other licenses. Third-party
-code keeps its own licenses — see
-[`echofog-core-oss/THIRD_PARTY_NOTICES.md`](echofog-core-oss/THIRD_PARTY_NOTICES.md). The embedded
-Wintun driver is redistributed unmodified from [wintun.net](https://www.wintun.net) under its own
-terms.
+EchoFog is licensed under the [Mozilla Public License 2.0](LICENSE) (MPL-2.0): changes to EchoFog's own
+files must stay open under the same license when you distribute them, while the code can be combined
+with code under other licenses. Third-party code keeps its own licenses, see
+[`echofog-core-oss/THIRD_PARTY_NOTICES.md`](echofog-core-oss/THIRD_PARTY_NOTICES.md). The embedded Wintun
+driver is redistributed unmodified from [wintun.net](https://www.wintun.net) under its own terms.

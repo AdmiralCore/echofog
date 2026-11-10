@@ -2,6 +2,9 @@
 
 # The node command line: every command and flag
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 `echofog-node` is what runs on a server (in Docker or directly). With Docker Compose the container
 runs `echofog-node run`; every other command is run next to it. This page lists them all. The
 same list is always available from the binary: `echofog-node help`, `echofog-node <command> -h`.

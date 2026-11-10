@@ -1,5 +1,8 @@
 # Birthday hole punching (symmetric NAT)
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 Developer notes on how EchoFog reaches a peer behind a symmetric NAT without a relay. User-facing
 text is in [reachability.md](reachability.md).
 

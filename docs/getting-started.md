@@ -2,345 +2,131 @@
 
 # Getting started with the EchoFog desktop app
 
-EchoFog is a peer-to-peer VPN that is hard to block, with free end-to-end encrypted chat and calls
-built in. This guide walks you through the desktop app, step by step. It takes about ten minutes.
+This guide is for 0.3.0, the first release on protocol v2. It walks through the first start, contacts,
+spaces, voice rooms and calls, files, and the built-in VPN. Short answers to common questions are in
+the [FAQ](faq.md).
 
-> **Status: experimental.** EchoFog has not had an independent security audit by a specialist
-> organization yet, and it has not been tested against a real national DPI. Do not rely on it in a
-> high-risk situation yet. See the [FAQ](faq.md) for what it does and does not protect.
+## Get the app
 
-## 1. Get the app
+Download the release for Windows or Linux from the
+[releases page](https://github.com/AdmiralCore/echofog/releases). Each release is signed; how to check
+that a download is genuine is in [Release trust](release-trust.md).
 
-Download the app from the project's [Releases page](https://github.com/AdmiralCore/echofog/releases).
+On Windows, the app is not signed with a code-signing certificate yet, so SmartScreen may warn about an
+unknown publisher. Check the release first, then choose *More info* → *Run anyway*.
 
-- **Windows:** the file is called `EchoFog-<version>-windows-amd64.exe`. There is nothing to
-  install: just run it. The file is not code-signed yet, so Windows SmartScreen may warn you about
-  an unknown publisher.
-- **Linux:** there is also a Linux build, `EchoFog-<version>-linux-amd64`. It needs the WebKitGTK
-  4.1 library (`libwebkit2gtk-4.1`) on your system.
+## First start: profile, password, recovery phrase
 
-Each release also has a `SHA256SUMS` file. If you know how, check that your download matches it.
+1. Choose **Create a profile** and set a password. It unlocks the encrypted database on this computer.
+2. The app shows a **recovery phrase**. Write it down on paper and keep it safe. With the phrase you can
+   restore your identity on another computer; without it, a lost password means a lost profile. Nobody,
+   including us, can recover it for you.
+3. The app connects to the network through its built-in entry nodes. You can see and change them in
+   *Settings* → *Network* → *Entry nodes*: turn the built-in ones off, add your own, or check whether an
+   entry answers.
 
-## 2. First start: profile, password, recovery phrase
+*Remember on this computer* (Windows) opens the profile without the password. It is convenient, but then
+anyone who can use your Windows account, or any program running in it, can open the profile.
 
-1. **Create a profile.** Type a name into the field that says *New profile name* and press
-   *Create*. A profile is just a separate account on this computer; you can have several.
-2. **Create an identity.** Choose *New identity*, then pick a password (at least 8 characters) and
-   repeat it. The password encrypts your keys on this computer. **It cannot be reset.**
-3. **Write down the recovery phrase.** The app shows you a list of words once. Write them down on
-   paper, in order, and keep them offline. Then tick *I have written the phrase down* and press
-   *Continue*.
-4. **Choose who can find this computer.** *Public* (recommended) is listed in the network like any
-   other computer: if you share your connection, anyone can find it and use it at your price.
-   *Hidden* is not listed anywhere and answers only the people you give your invitation link to,
-   your contacts and those who joined before; you still use the network as usual. Press
-   *Continue*. You can change it later in **Proxy → Access to this computer**.
+To restore a profile on another computer, choose **Restore** (*Restore from recovery phrase*). Your identity, and so your
+contacts' view of you, stays the same; the new computer is a new device of the same account.
 
-Why the phrase matters:
+## Contacts
 
-- It is the **only backup**. If you forget the password or lose the computer, the phrase brings
-  back your identity and your wallet (*Forgot password* → *Recovery phrase*).
-- **Anyone who has the phrase controls your identity and your wallet.** Never type it into a
-  website or send it to anyone, including people who say they are from EchoFog.
+Your link is in **My contact** (the QR button above the chat list). Send it to someone through any
+channel; when they open it in EchoFog (or paste it with **Ctrl+L**), they send you a request, and you
+accept it. Links also come in an https form that messengers make tappable: the page opens the app or
+offers the download.
 
-Already have a phrase from another computer or a server node? Choose *Recovery phrase* instead of
-*New identity* and type the 12 or 24 words. If the phrase was made with an extra passphrase, open
-*The phrase was made with an extra passphrase* and type it there. Then pick a new password.
+A link can have a term. Someone who is not your contact can write to you, but the chat is marked as a
+request, and calls and files wait until you accept the request.
 
-To delete a profile, press the bin next to it in the profile list. It asks for that profile's
-password, so a web page cannot wipe your data on its own.
+## Spaces, channels and voice rooms
 
-**Open without the password (Windows only).** Tick *Remember on this computer* when you unlock, or
-turn it on later in **Settings** → *Remember on this computer* (it asks the password once). EchoFog
-then opens this profile at start without asking, so a computer that shares an exit or a relay is
-back online by itself after a restart. The key is sealed for your Windows account: **everyone who
-can use that account, and any program running in it, can open EchoFog and read your messages.**
-*Ask the password before payments* (on by default) still asks the password before every payment
-from the wallet and every deposit into the vault. *Lock with the password* stops EchoFog and asks
-the password; the next start of the app opens without it again. Only one profile opens by itself.
+The narrow bar on the left is the rail. At the top is **Personal** (your direct chats and *Saved
+messages*), below it your spaces, and **+** to create a space or join one by link.
 
-**Change the password.** **Settings** → *App password*: type the *Current password*, the new one
-twice and press *Change password*. Your identity, recovery phrase, wallet and messages stay as they
-were, and a remembered sign-in follows the new password. Other computers where you restored this
-identity keep their own passwords.
+- **Create a space**: **+** → *Create*. Add text channels and voice rooms, group them in categories, and
+  set roles and per-channel permissions in the channel settings (the gear next to a channel).
+- **Invite people**: the space's *Info* window → *Invite*. An invitation can have a term and can
+  require your approval for each request.
+- **Moderate**: slow mode and "only admins write" per channel, removing and banning members, the log of
+  what moderators did.
+- **Voice rooms**: one click on a room joins it. While you are in a room you can open any text channel;
+  the call shrinks to a mini window, and *Open call* brings it back.
+- **Hide the column** of channels with **Ctrl+B** when you need room for the chat or the stream.
 
-## 3. Turn on the VPN
+Replies, threads, reactions, edits, pins and mentions (`@name`, `@all`) work in every chat; a chat can
+be muted.
 
-Open **Proxy** in the left menu. Pick how to choose an exit — an exit is another person's computer
-your traffic goes out to the Internet from:
+## Calls and screen streams
 
-- **Automatic** — the app checks exits in the background and picks the one that opens your sites
-  fastest for the best price. *Check sites* lets you choose which sites it tests.
-- **Choose myself** — pick an exit from the list. Sort it by *Best*, *Ping*, *Price* or *Speed*.
-  *Test* next to an exit checks whether it answers, how many test sites open through it and how
-  fast it is.
-- **Specific node** — connect through one computer you know, for example a friend who shares
-  their connection with you for free, or a hidden exit you were invited to. Paste the link
-  (`echofog://join?…` or `echofog://relay/…`), `host:port/peer-id` or peer ID they gave you.
+- **Call** a contact from the chat header, or start a call in a group.
+- **Share your screen** from the call bar: pick a screen or a window and the quality, up to 4K at 60 fps.
+  The stream reaches viewers over a tree of their own uplinks, so it does not need a server; viewers who
+  cannot keep up get a lower layer automatically.
+- The route of calls is in *Settings* → *Tor and proxy*: *Direct* is fastest but shows your address to
+  the person you call; *Through a relay* hides it from them.
 
-*Switch to another exit if this one stops working* is on by default: if the exit disappears, stops
-sharing or no site opens through it, the app moves to another working exit. Your programs keep the
-same proxy address.
+## Files and voice messages
 
-Press **Connect**. When it says *Connected*, you have two ways to use it:
+Drag a file into a chat or use the clip. A file sent into a group lands in the same channel and thread
+for everyone. Large files resume after a break.
 
-- **SOCKS5 for apps** (the default). The app shows a local address such as `127.0.0.1:…`. Only
-  programs you set to use this SOCKS5 proxy (for example, a browser) go through the exit.
-- **Route the whole computer through the exit.** Turn on this switch and every program goes
-  through the exit. It **asks for administrator rights**.
+Files you receive are saved as ordinary, **unencrypted** files in your download folder. Keep that in mind
+for sensitive files; an encrypted media store comes after 0.3.0.
 
-Next to it is the **Kill switch**, on by default. If the exit drops, you switch exits, the network
-changes or EchoFog crashes, programs stay offline instead of going out on your real address, until
-an exit serves you again. Read the note under the switches: it does not cover everything yet. If
-the helper process itself is killed, or Windows removes the EchoFog adapter, the normal connection
-comes back, and DNS is kept inside the tunnel only on a best-effort basis. With the kill switch
-off, programs fall back to your normal connection when something goes wrong, and your real IP can
-show.
+When someone is offline, a message waits in an encrypted mailbox for up to 7 days. Its state is shown
+as *waiting for delivery*, *waiting at a relay* or *delivered*.
 
-If EchoFog stopped while the whole computer went through the exit, the kill switch keeps the
-internet blocked. The login screen and the Proxy screen say so. Connect to an exit and it comes
-back by itself, or press *Unblock the internet*.
+## The VPN
 
-**Your exits** lists the exits you used and what each one gave, kept encrypted on this computer
-only. Star one to make it a favourite, rename it, copy its link, connect to it again or forget it.
-While you are not connected, *Connect to the last exit* takes you back in one click.
+Open **VPN** at the bottom of the rail.
 
-## 4. Paying for traffic
+1. Paste the link to an exit that someone gave you and press *Connect*.
+2. Choose how to use it:
+   - **Apps through a proxy**: point a browser or another app to the SOCKS5 proxy the screen shows
+     (`127.0.0.1:1080` by default);
+   - **The whole computer**: everything goes through the exit, with a kill switch. If the tunnel drops,
+     the kill switch keeps apps offline instead of letting them out directly.
+3. If the exit refuses, the screen says why (busy, no path, a policy of the exit, and so on) and what
+   helps.
 
-Some exits are free. Others set a price per GB, paid in TON or USDT from the app's own wallet
-(**Wallet** in the menu). Many exits give a little free test traffic first.
+If the kill switch is holding the network closed and you need the normal connection back, use *Disable
+protection* on the VPN screen. Details: [Windows](kill-switch-windows.md), [Linux](kill-switch-linux.md).
 
-When you pick a paid exit, a box says *This exit is paid* with its price and how many KB a day
-are free. Payments come from your deposit if you have one, otherwise straight from your wallet.
-Tick *Pay automatically, up to $… a day* to let the app top up by itself. While you are connected,
-the *Paying this exit* card shows what is left and what you spent today, where it is paid from
-(*Deposit* or *Wallet*), the daily limit and *Pay $… now*.
+## Share your own exit
 
-The cheapest way to pay is a **deposit**: you put TON into your own small contract once, and the
-exits take only what you used, every few hours. You make it in **Wallet**, on the *Deposit for paid
-nodes* card: *Deposit* puts TON in, *Withdraw* takes the rest back (it takes about a day). How this
-works, and its current testnet status: [vault-payments.md](vault-payments.md).
+You can let chosen people go online through your computer. **Their traffic leaves from your IP address**,
+and you answer for it, so read [the FAQ](faq.md#what-happens-if-i-share-my-connection-as-an-exit) first.
 
-The wallet is for traffic only. Its keys live on this computer, so do not keep savings in it.
+On the VPN screen, open the *Sharing* tab:
 
-Sends you start yourself above 1 TON (or 1 USDT) ask for a yes in a window of the system. Smaller
-ones add up: once the sends of the last hour reach that amount, the next one asks too. A payment
-to an exit that a page asks for goes through the same check. Paying for the traffic you use runs
-on its own and asks nothing.
+- by default only the people you confirm can connect, and each new request waits for your answer;
+- *Anyone with the link* is a separate switch with a term, and you can revoke it at any time;
+- the screen shows who is connected, and you can disconnect anyone;
+- sharing turns off after every restart.
 
-## 5. Share your connection (optional)
+## Tor and proxy
 
-You can also be an exit yourself: other people's traffic then goes out to the Internet through your
-computer, and they pay you your price (or nothing).
+*Settings* → *Tor and proxy* sends the app's own traffic through Tor or another SOCKS5 proxy, so the
+EchoFog network does not see your address. In this mode the app does not punch through routers and does
+not announce your address; calls go through relays by default (*Direct* would show your address). It is
+slower, and it only helps if Tor or the proxy is reachable from your network.
 
-1. Decide **who** may use it, under **Proxy → Access to this computer**:
-   - **Public** — anybody can find your exit in their list and use it at your price.
-   - **Hidden** — nobody can find it. It answers only the people you send your **invitation
-     link** to, your contacts and those who joined before. The mode changes after you restart the
-     app.
-2. In **Share your connection** set the price in dollars per GB (`0` is free) and press
-   **Start sharing**. A public exit also needs your upload speed (*Measure* fills it in).
-3. Public: you are done, people find you on their own. Hidden: copy **Your invitation link** from the
-   *Access* card and send it to your people; they paste it into **Specific node**.
+## When something does not work
 
-Friends who should never pay go under **Free for these people**. **The traffic of the people you
-serve leaves from your IP address**, and the legal responsibility is yours: read
-[What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection) first. All the
-details of the hidden mode, in plain words: [Hidden and isolated nodes](hidden-nodes.md).
-
-## 6. Chats, groups and calls
-
-Everything here is free and end-to-end encrypted.
-
-- **Give your contact.** In **Chats**, press the QR-code button (*My contact*). Show the code or
-  press *Copy link* and send the link to a friend.
-- **Add a contact.** Press the pencil button at the top of **Chats** (*New*) and choose
-  *Add a contact*. Paste their link (or key), type a name and press *Add contact*. Or press *Scan*
-  and point the camera at their code.
-- **Create a space.** *New* → *New space*, type a name, choose *Group* (everyone writes) or
-  *Channel* (only admins write) and press *Create*. To invite people, press the gear next to the
-  space's name and copy the invitation: an https link messengers make tappable. You can also make
-  invitations with a term, a limit, a role or approval, or save the whole group to a password-sealed
-  file (.fogzip) that shows its history at once. They join with *New* → *Join by invite*, or
-  **Open a link** (Ctrl+L). Roles, per-channel permissions, categories, timeouts and the moderation
-  log: [Groups and spaces](groups.md).
-- **Channels and voice rooms.** In a space, the column on the left lists its text channels and
-  voice rooms. Admins add them with *+*, and change a channel with the gear that shows when you
-  hover over it (or a right click): name, topic, "only admins post", order, remove. You can also
-  drag channels to reorder them. Click a voice room to join it; the people inside are listed under
-  it.
-- **What you can do with a message.** Right-click it (or press the arrow on it) for its menu:
-  quick reactions, *Reply* (or double-click the message), *Comment*, *Edit*, *Pin*, *Copy text*,
-  *Save message*, *Save as text file*, *Details* and *Delete for everyone*. Some of them show only
-  on your own messages or for your role. A pinned message shows in a bar at the top of the chat;
-  click the bar to go to it. Ctrl+F searches the chat: Enter goes to the earlier match, Shift+Enter
-  to the later one.
-- **Threads.** *Comment* in a message's menu starts a thread. The speech-bubble button at the top
-  of a space lists the channel's threads.
-- **Saved messages.** *Save message* keeps a message in *Saved messages*, at the top of the chat
-  list.
-- **Files.** Send a file with the paper clip, or drop it on the chat. The other side presses
-  *Download* or *Decline*; a picture shows a small preview at once. A file you posted in a group
-  stays on offer until you press *Stop sharing*. A space's settings (the gear next to its name) show
-  its five newest files; *Show all* lists the rest, with a search by name. How it works:
-  [Sending files](file-transfer.md).
-- **A contact's profile.** Click the name at the top of a chat. Click the name to rename them and
-  the picture to set one (only you see both). Below are *Media*, *Files* and *Links* from your chat.
-- **Call.** In a chat, press the phone button for a voice call or the camera button for a video
-  call. In a space with voice rooms you call by joining a room. *Deafen* turns off all sound for
-  you. Hover over a person's tile and press *More* to set their *User volume* or *Mute for me*. On
-  your own tile, *More* → *Tile background* picks an animated background that everyone sees while
-  your camera is off (also in **Settings** → *Tile background in calls*, where you can hide the
-  backgrounds other people chose).
-- **Direct or through a relay.** The top bar of a call says *direct* or *via relay*. Click it. For
-  a call through a relay it says why a direct link did not work out (most often the provider keeps
-  you behind its own NAT), what would help (a public IP from the provider, a forwarded port) and
-  which relays the call can use: switch to another one, or add your own by its link. Paid relays
-  are listed but cannot be bought yet.
-- **Watch a stream.** A stream someone shares starts for you only when you press *Watch stream*
-  on it. Hover over its tile for *Stream stats*, *Switch relay* (when the stream lags or shows
-  garbage), *Stop watching* and *Full screen*. When the person also has their camera on, it sits
-  over their screen: drag it where you like, resize it from its corner, pick its shape (circle,
-  rounded, square, hexagon, wide) from the bar it shows on hover, or hide it; the camera button on
-  the tile brings it back.
-- **Share your screen.** During a call, press *Share your screen* and pick a screen or a window;
-  each shows a live picture. On Windows EchoFog captures and encodes the screen itself on the
-  graphics card, so the stream keeps up with your monitor. *Share the sound* (on by default) sends
-  the people watching what the window's program plays, or for a whole screen everything the
-  computer plays except the call itself; each of them can mute
-  it with the speaker button on the stream. Your own tile shows the stream as viewers get it.
-  The arrow next to the button opens *Stream quality*: up to 4K at 60 fps, or 1080p and 1440p at
-  120 and 144 fps, but high quality needs a fast upload. The picture is most even when the frame
-  rate divides your monitor's refresh rate: on a 144 Hz monitor stream 144, and for 60 or 120 fps
-  set the monitor to 120 Hz. The quality you pick is the most the stream goes out at: when your
-  connection carries less, it steps down to a lighter quality (fewer frames first, then fewer
-  pixels) rather than smearing the one you picked, and steps back up once the connection has held
-  for a while; when the people watching have 60 Hz screens, it sends 60 frames rather than 144
-  they could not show evenly. While you share, the menu shows what really goes out, why it is
-  lower than you picked, and whether the graphics card or the processor encodes it.
-- **The browser's capture.** Where the app's own capture cannot run (another system, an old
-  Windows, no hardware encoder), or when you choose *Browser (Edge)* in that menu or in *Settings →
-  Screen sharing*, the built-in browser captures the screen with its own picker, often at 30-50 fps.
-  Its *What to keep* sets what gives way when the computer or the network falls short:
-  *Smoothness* (games, films: the picture gets softer, the frame rate holds) or *Sharpness* (text,
-  code, slides: frames are skipped, text stays sharp). To share the sound there, pick a whole
-  screen and tick *Share system audio* (or a browser tab with *Share tab audio*).
-- **Strangers and blocking.** When somebody who is not in your contacts writes to you, the chat
-  shows up with a *request* label. They cannot call you or send files until you press *Accept*
-  (answering them accepts them too). To stop hearing from somebody, open their chat, press the
-  info button at the top and choose *Block*: their messages, calls, files and group invitations no
-  longer reach you, and they are not told. Who may write to you and who may call you (by default
-  only your contacts) is under **Settings** → *Privacy*, together with the list of blocked people.
-
-## 7. Hide your address
-
-### Tor and the route of calls
-
-**Settings** → *Tor and proxy* sends the app's own traffic (messages, the network) through Tor or
-another SOCKS5 proxy, so the EchoFog network does not see your IP address: choose *Tor Browser*
-(keep it open), *Tor service* or *My SOCKS5*, press *Check*, then *Save* and restart the app. Through
-a proxy the app uses TCP only and is slower, and the whole-computer VPN mode is off.
-
-Tor carries no UDP and is too slow for video, so **calls** have a route of their own on the same
-card: *Automatic* (direct where possible, through a relay when Tor or guards are on), *Direct*
-(fast, but the person you call sees your address) or *Through a relay* (only the relay sees it;
-quality depends on the relay).
-
-### Anonymous mode
-
-**Settings** → *Anonymous mode* makes sure nothing in the app shows your address:
-
-- *Through Tor*: nobody in the EchoFog network sees it (set Tor above first). Slower.
-- *Only my relay*: the app connects to the relay you pinned under *Joining the network* and to
-  nothing else, so only that relay sees your address. Fast enough for calls and streams; the VPN
-  then works only with that relay as its exit.
-
-Either way calls and files go through relays, nothing punches holes, maps ports or asks STUN, and
-the update check and the location lookup go through Tor or the VPN or are skipped. The TON wallet
-stays offline unless you allow it (its servers would see your address). If the mode cannot work
-(no Tor set, no relay pinned), the app connects nowhere rather than in the open. While it is on,
-the sidebar shows *IP hidden* (*Through Tor*) or *IP: own relay only* (*Only my relay*). It applies
-when the app next starts.
-
-What it does not cover: the hosting of your relay knows who pays for it, and how and when you write
-can give you away. For a public group, use a separate profile from your personal one.
-
-## 8. Settings: look, sound, network, links
-
-- **Theme.** *Appearance* chooses the theme: *System*, *Light* or *Dark*.
-- **Language.** The *Language* card chooses *System*, English or Русский. *System* follows your
-  Windows settings.
-- **Sounds.** The *Sounds* switch turns the app's sounds on or off; set their volume and listen to
-  each one.
-- **Start with Windows.** *Start with Windows* starts EchoFog minimized when you sign in to Windows.
-  With *Remember on this computer* (see [First start](#2-first-start-profile-password-recovery-phrase))
-  it also opens your profile by itself, so an exit or a relay you share from home is back after a
-  reboot.
-- **Screen sharing.** *Fast (EchoFog)* captures your screen with the app itself, *Browser (Edge)*
-  with the built-in browser (see [Share your screen](#6-chats-groups-and-calls)); the switch below
-  says whether the fast capture shares the computer's sound.
-- **Network.** *Direct socket* skips NAT discovery for top speed, only for a computer with a
-  public IP. *UDP socket buffer, MB* sets the socket buffer. Both apply after a restart.
-- **Links.** *Open an EchoFog link* → *Open a link* (or Ctrl+L) takes a contact link, a group
-  invitation or a node's link (`echofog://join?…`, `echofog://relay/…`) and offers what fits: add
-  the contact, join, use it for the VPN, add it as a relay. A link pasted anywhere outside a text
-  field opens it too, and so does an `echofog://` link clicked in a browser.
-- **Updates.** When a new version is out, a banner says *EchoFog v… is available*, with
-  *Download from GitHub*.
-
-## 9. If the app shows no connection
-
-If a banner says **No connection to the network**, the built-in entry nodes may be blocked where
-you are. The app joins the network through *bootstrap nodes* — the first nodes it connects to.
-
-1. Get a node address from a friend who runs a node, or from the [EchoFog channel](https://t.me/EchoFogDev).
-2. Press **Add a node** on the banner (or open **Settings** → *Bootstrap nodes*).
-3. Paste the address and press **Add and connect**. It looks like `echofog://relay/…` or
-   `host:port/peer-id`. The peer ID part is required.
-
-The chip next to *Bootstrap nodes* shows how many peers you are connected to.
-
-**Settings** → *Joining the network* shows how the app goes in. By default (*Automatic*) it goes
-through a few camouflaged guard servers where the internet is censored, so your address is not
-spread around, and directly elsewhere. *Always through guards* hides your address everywhere, a
-little slower; *Direct* is the old way. *Route through your own relay* pins a relay you run or
-trust, and the app always goes in through it. This is only about the network: the VPN exit is
-chosen on the Proxy page. How guards work: [Anti-DPI](anti-dpi.md#guards-a-users-node-keeps-few-links-across-the-border).
-
-If a message says *No way to the recipient right now*, a call says *No way to them right now*, or a
-space you joined says *No member of the group can be reached yet*, you and the other side are both
-behind routers that cannot be punched through and no relay is connected. It goes once one is;
-turning on UPnP on your router usually fixes it at once. See [Reachability](reachability.md#when-both-sides-are-hard-to-reach).
-
-A different message, *This computer cannot be reached from the Internet*, is not a problem for
-you as long as a relay is in reach: chats, calls and the VPN still work. It only matters if you want to serve others as a relay or
-a public exit (a hidden exit for your own people works without it). See
-[reachability.md](reachability.md).
-
-## 10. Logs and feedback
-
-If something does not work, open **Logs**. *Copy all* copies the log; *Save* writes it to a file in
-your home folder. If the app closes by itself (for example right after the password), the reason is
-in `crash.log` next to the log file (`%LOCALAPPDATA%\EchoFog` on Windows). A database damaged by a
-power cut or a crash while saving is repaired at the next start, with a copy kept beside it.
-
-**Connection report.** *Logs* → *Connection report* puts together what the app knows about how it
-connects — country, provider, NAT, which transports get through, guards, the VPN and the latest
-problems — without any IP address, ID, link or contact. Nothing is sent: *Open the report form on
-GitHub* opens an issue with it filled in, for you to read and post. Reports that it works help as
-much as reports that it does not.
-
-**Check before you share.** Passwords, keys and the recovery phrase are blanked out, and IP
-addresses are masked automatically, but node IDs, sites you checked and contact names can stay in
-the logs. Read what you send, and post logs only where you trust the readers.
-
-Send feedback and bug reports as an [issue on the project's GitHub page](https://github.com/AdmiralCore/echofog/issues), in the [EchoFog channel](https://t.me/EchoFogDev), or in the [community chat](https://t.me/+3N3EKWXi-ow3MzBi). Security problems: see [SECURITY.md](../SECURITY.md).
+- **No connection**: check *Settings* → *Network* → *Entry nodes* (*Check* shows which entries answer), or
+  open an invitation link from someone already in the network.
+- **A message hangs in "waiting for delivery"**: neither side can reach the other right now and no
+  mailbox has it yet; it is delivered when one of you is online with a path.
+- **Connection report**: *Settings* → *Diagnostics* → *Connection report* gathers what the app knows about
+  its connection, without addresses or IDs, ready to post in an issue.
+- **A crash** is written to `crash.log` next to the log (`%LOCALAPPDATA%\EchoFog` on Windows).
 
 ## Next
 
-- [FAQ](faq.md) — short, honest answers about privacy, payments and risks.
-- [Groups and spaces](groups.md) — channels, roles, invitations, moderation, the group file.
-- [How it works](how-it-works.md)
-- [Run a node](run-a-node.md) — share your connection or help others get online.
-- [Hidden and isolated nodes](hidden-nodes.md) — share your connection only with the people you
-  choose.
+- [Groups and spaces](groups.md): roles, permissions, invitations and moderation in detail.
+- [FAQ](faq.md): safety, logs, legal risks.
+- [SECURITY.md](../SECURITY.md): what is and is not protected.
+- Run your own node: [VPS with protocol v2](deploy-vps-v2.md).

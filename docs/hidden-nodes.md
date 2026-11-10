@@ -2,6 +2,9 @@
 
 # Private access: hidden and isolated nodes
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 This guide is for anyone who wants to share their connection **only with certain people**: family,
 friends, a team, or customers who pay you directly. You do not need to be technical: each mode is
 explained in plain words first, then there are step-by-step instructions. The technical details are
@@ -113,7 +116,7 @@ If the card says *This computer does not know an address others can reach it at 
 until the app is connected to the network.
 
 **Remember:** while your exit is on, the traffic of the people you invited leaves to the Internet
-from **your** address. Read [What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection).
+from **your** address. Read [What happens if I share my connection?](faq.md#what-happens-if-i-share-my-connection-as-an-exit).
 
 ## Step by step: use a link somebody gave you (desktop app)
 

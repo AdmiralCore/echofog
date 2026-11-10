@@ -1,5 +1,8 @@
 # Paying for traffic from a TON vault
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 *How EchoFog users pay proxy/VPN nodes, in plain words. A Russian version is in
 [vault-payments.ru.md](vault-payments.ru.md).*
 

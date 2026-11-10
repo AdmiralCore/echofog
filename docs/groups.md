@@ -2,6 +2,9 @@
 
 # Groups and spaces
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 A group in EchoFog works like a community server — channels, voice rooms, roles, invitations,
 moderation — but there is no server. Everything a group is lives in one encrypted log that every
 member keeps a copy of, and every change in it (a message, a new channel, a role, a ban) is signed

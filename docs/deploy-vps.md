@@ -2,6 +2,9 @@
 
 # Running a node on a VPS with Docker
 
+> **This page still describes protocol v1 (0.2.x).** It is being rewritten for 0.3.0, the first release on
+> protocol v2; some commands, settings and limits here no longer apply. Current overview: [README](../README.md).
+
 Any VPS with a public IP and Ubuntu or Debian will do. This page is the short recipe; what the
 roles and settings mean is in [Run a node](run-a-node.md).
 
