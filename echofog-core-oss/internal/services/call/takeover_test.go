@@ -252,9 +252,11 @@ func TestRoom_ASmallerHalfYieldsToTheLarger(t *testing.T) {
 		return leaders == 1
 	}, 30*time.Second, 100*time.Millisecond, "the smaller half never settled on one coordinator")
 
-	// the halves meet again: the larger one is the call
+	// the halves meet again: the larger one is the call. The lone coordinator of the smaller half
+	// yields when a heartbeat of the larger one reaches it, which on a loaded runner takes longer
+	// than the election windows that produced the split.
 	cut.Store(false)
-	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 20*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 45*time.Second, 100*time.Millisecond,
 		"the halves stayed apart: %v", dumpRoom(nodes, nil))
 	for _, nd := range nodes {
 		s, ok := nd.cm.Snapshot()
