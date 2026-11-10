@@ -166,6 +166,7 @@ type fakeLinks struct {
 	inviteOpt  access.MintOptions
 	invited    int
 	preview    map[string]*links.Preview
+	previewErr map[string]error
 	redeemed   []string
 	redeemErr  error
 	peer       node.Peer
@@ -179,7 +180,11 @@ func (f *fakeLinks) Invite(_ context.Context, o access.MintOptions) (*links.Invi
 		Web: "https://join.example.org/join/#join?v=2&card=SECRETCARD&s=SECRETSECRET", Expires: testNow.Add(24 * time.Hour), MaxEntries: o.MaxEntries}, nil
 }
 func (f *fakeLinks) Open(l string) (*links.Preview, error) {
-	if p, ok := f.preview[strings.TrimSpace(l)]; ok {
+	t := strings.TrimSpace(l)
+	if err, ok := f.previewErr[t]; ok {
+		return nil, err
+	}
+	if p, ok := f.preview[t]; ok {
 		return p, nil
 	}
 	return nil, links.ErrNotLink
@@ -392,6 +397,65 @@ func TestPreviewReadsALinkInsidePastedText(t *testing.T) {
 	}
 	if len(r.ln.redeemed) != 0 {
 		t.Fatal("a preview dialed")
+	}
+}
+
+func TestPreviewAndAddByLinkJoinAWrappedLink(t *testing.T) {
+	r := newRig(t, app.ModePublic)
+	// the link service is the place that joins the line breaks a terminal put inside the link
+	wrapped := "echofog://join?v=2&card=" + strings.Repeat("A", 30) + "\n" + strings.Repeat("B", 30)
+	r.ln.preview[wrapped] = &links.Preview{Kind: links.KindContact, Node: nid(7), Device: nid(8), NotAfter: testNow.Add(time.Hour)}
+
+	info, err := r.a.Preview(wrapped)
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	if info.Kind != "contact" || info.Node != hx(nid(7)) {
+		t.Fatalf("info %+v", info)
+	}
+	if _, err := r.a.AddByLink(context.Background(), wrapped); err != nil {
+		t.Fatalf("AddByLink: %v", err)
+	}
+	if len(r.ln.redeemed) != 1 || r.ln.redeemed[0] != wrapped {
+		t.Fatalf("redeemed %q, want the whole pasted text", r.ln.redeemed)
+	}
+}
+
+// TestAWrappedLinkKeepsTheRefusalOfTheSecondPass: a link that was wrapped across lines is read by
+// the second pass over the whole pasted text. When that pass refuses it for a real reason (the card
+// has expired, the link is damaged), that reason must reach the UI, not "this is not a link" from
+// the shortened first token.
+func TestAWrappedLinkKeepsTheRefusalOfTheSecondPass(t *testing.T) {
+	wrapped := "echofog://join?v=2&card=" + strings.Repeat("A", 30) + "\n" + strings.Repeat("B", 30)
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"expired", links.ErrExpired},
+		{"damaged", links.ErrMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, app.ModePublic)
+			r.ln.previewErr = map[string]error{wrapped: tc.err}
+
+			if _, err := r.a.Preview(wrapped); !errors.Is(err, tc.err) {
+				t.Fatalf("Preview: %v, want %v", err, tc.err)
+			}
+			if _, err := r.a.AddByLink(context.Background(), wrapped); !errors.Is(err, tc.err) {
+				t.Fatalf("AddByLink: %v, want %v", err, tc.err)
+			}
+			if len(r.ln.redeemed) != 0 {
+				t.Fatalf("a refused link was redeemed: %v", r.ln.redeemed)
+			}
+		})
+	}
+
+	// a link inside words is not a wrapped link: its first token stays the answer
+	r := newRig(t, app.ModePublic)
+	r.ln.previewErr = map[string]error{wrapped: links.ErrExpired}
+	if _, err := r.a.Preview("вот: " + wrapped); !errors.Is(err, links.ErrNotLink) {
+		t.Fatalf("text with words before the link: %v, want ErrNotLink", err)
 	}
 }
 

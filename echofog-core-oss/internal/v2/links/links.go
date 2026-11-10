@@ -198,10 +198,40 @@ func (s *Service) Invite(ctx context.Context, opt access.MintOptions) (*Invitati
 func (s *Service) Open(link string) (*Preview, error) { return Open(link, s.cfg.Clock.Now()) }
 
 // Open parses and verifies a link offline at now: no network, no DHT (objects.md §10.1: the link is
-// complete). Surrounding white space is ignored; the v1 slash form is accepted.
+// complete). Surrounding white space is ignored, and so is the white space a terminal puts inside a
+// link it wrapped; the v1 slash form is accepted.
 func Open(link string, now time.Time) (*Preview, error) {
 	p, _, err := open(link, now)
 	return p, err
+}
+
+// maxWrappedLink bounds the text joinWrapped takes: a terminal can put a break after every
+// character, so a link wrapped with a one-byte break (LF, or CR alone) comes back at most twice its
+// own length; a CRLF break would give three times. A real link is far shorter than this bound (an
+// invitation is about 1.4 KiB), and a longer text is left as it is.
+const maxWrappedLink = 2 * (16 << 10)
+
+// linkSpace is the white space a terminal inserts when it wraps a long line.
+var linkSpace = strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "")
+
+// IsJoinForm reports whether s begins with a link that may carry the line breaks of a terminal:
+// the echofog:// forms or the https join page. The slash web form of the page (…/join/#join/?…)
+// is not one of them: only the three forms above are joined, so with the breaks of a terminal it
+// does not open.
+func IsJoinForm(s string) bool {
+	return strings.HasPrefix(s, "echofog://join?") ||
+		strings.HasPrefix(s, "echofog://join/?") ||
+		(strings.HasPrefix(s, "https://") && strings.Contains(s, "/join/#join?"))
+}
+
+// joinWrapped removes the white space a terminal puts into a long line: a link copied from a
+// terminal comes with line breaks or spaces inside it. Only a text that begins with a join link is
+// touched; other text is left as it is. ParseLink still bounds the result.
+func joinWrapped(s string) string {
+	if len(s) > maxWrappedLink || !IsJoinForm(s) {
+		return s
+	}
+	return linkSpace.Replace(s)
 }
 
 func open(text string, now time.Time) (*Preview, *objects.Link, error) {
@@ -209,6 +239,7 @@ func open(text string, now time.Time) (*Preview, *objects.Link, error) {
 	if text == "" {
 		return nil, nil, fmt.Errorf("%w: empty", ErrNotLink)
 	}
+	text = joinWrapped(text)
 	l, err := objects.ParseLink(text)
 	switch {
 	case errors.Is(err, objects.ErrOtherVersion):
@@ -218,7 +249,8 @@ func open(text string, now time.Time) (*Preview, *objects.Link, error) {
 	}
 	c, err := l.Verify(now)
 	if err != nil {
-		// Tell a card that is bad by itself from a good card in the wrong kind of link.
+		// Tell a card that is expired, a card that is damaged by itself, and a good card carried
+		// by the wrong kind of link apart.
 		_, cerr := objects.VerifyCard(l.Card, now)
 		switch {
 		case cerr == nil:
@@ -226,7 +258,7 @@ func open(text string, now time.Time) (*Preview, *objects.Link, error) {
 		case errors.Is(cerr, objects.ErrExpired):
 			return nil, nil, ErrExpired
 		default:
-			return nil, nil, fmt.Errorf("%w: card: %v", ErrNotLink, cerr)
+			return nil, nil, fmt.Errorf("%w: card: %v", ErrMismatch, cerr)
 		}
 	}
 	kind := KindContact
