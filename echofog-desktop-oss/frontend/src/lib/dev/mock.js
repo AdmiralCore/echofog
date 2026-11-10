@@ -1312,7 +1312,7 @@ const spaceChans = {
     { id: 'design', name: 'design', voice: false, position: 1, slowSecs: 30 },
     { id: 'news', name: 'announcements', voice: false, readOnly: true, position: 2 },
     { id: 'lounge', name: 'Lounge', voice: true, position: 0, call: { room: 'lounge', callId: 'call_room_demo', coordinator: BOB, from: BOB, startedAt: sec(Date.now()) - 300, members: [BOB, CAROL] } },
-    { id: 'stream', name: 'Stream', voice: true, position: 1 },
+    { id: 'stream', name: 'Stream', voice: true, stream: true, position: 1 },
   ],
 };
 // the main channel's settings, and the roles a group defined, by group
@@ -1625,6 +1625,41 @@ if (new URLSearchParams(location.search).has('missed')) {
     clearInterval(wait);
     setTimeout(() => emit('call:missed', { callId: 'call_old', coordinator: BOB, from: BOB, timestamp: Date.now() - 10 * min }), 1500);
   }, 200);
+}
+
+
+// ?mock&streamchannel: a model of a stream channel (video, chat by role, moderation) over the app.
+// There is no core behind it; the screen exists only here, so a real build never has it.
+if (new URLSearchParams(location.search).has('streamchannel')) {
+  const roles = { viewer: { tone: 'neutral' }, booster: { tone: 'accent' }, moderator: { tone: 'info' }, owner: { tone: 'warn' } };
+  const people = [
+    { id: 'alice', name: 'Alice Moreau', role: 'owner', onStage: true },
+    { id: 'bob', name: 'Bob Ivanov', role: 'moderator', onStage: true },
+    { id: 'nina', name: 'Nina Park', role: 'booster' },
+    { id: 'marco', name: 'Marco Rossi', role: 'viewer' },
+    { id: 'tom', name: 'Tom Berg', role: 'viewer' },
+    { id: 'eva', name: 'Eva Lind', role: 'booster' },
+  ];
+  const lines = [
+    ['nina', 'Cool boss design, which game is this?'], ['marco', 'What graphics preset is it?'], ['bob', 'Please keep spoilers out of the chat'],
+    ['alice', 'Phase 2, attempt 12. Wish me luck'], ['tom', 'How many attempts so far?'], ['eva', 'Two hours in, he is persistent'],
+  ];
+  const at = Date.now();
+  const messages = lines.map(([from, text], i) => ({ from, text, at: at - (lines.length - i) * 40000 }));
+  Promise.all([import('../components/call/StreamChannel.svelte'), import('../stores/chats.js'), import('svelte/store')]).then(async ([{ default: StreamChannel }, chatStore, { get }]) => {
+    // the model sits where the chat does: the group's channels column stays at the left
+    for (let i = 0; i < 40 && !get(chatStore.chats).some((c) => c.kind === 'group'); i++) await new Promise((r) => setTimeout(r, 100));
+    const group = get(chatStore.chats).find((c) => c.kind === 'group');
+    if (group) await chatStore.openChat(group.id);
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:9000';
+    document.body.appendChild(host);
+    const place = () => { const bar = document.querySelector('.chanbar'); host.style.left = bar ? Math.round(bar.getBoundingClientRect().right) + 'px' : '0'; };
+    await new Promise((r) => setTimeout(r, 400));
+    place();
+    window.addEventListener('resize', place);
+    const view = new StreamChannel({ target: host, props: { data: { title: 'Boss raid, phase 2 · attempt 12', channel: 'Game night', space: group ? group.name : '', host: 'Alice Moreau', viewers: 1248, roles, people, messages }, onClose: () => { window.removeEventListener('resize', place); view.$destroy(); host.remove(); } } });
+  });
 }
 
 console.info('[wails-mock] fake Go core active');

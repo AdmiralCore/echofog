@@ -51,16 +51,12 @@
 <style>
   .inv {
     display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 12px; min-width: min(260px, 60vw); max-width: 340px;
-    border-radius: 14px; background: var(--raised); border: 1px solid var(--line-soft);
+    border-radius: var(--r-xl); background: var(--surface-2); border: 1px solid var(--border);
   }
-  .inv.mine { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.25); }
   .top { display: flex; gap: 10px; align-items: center; }
   .what { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .eyebrow { font-size: 11px; font-weight: 650; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent); }
-  .mine .eyebrow { color: rgba(255, 255, 255, 0.85); }
   .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub { font-size: 12px; color: var(--muted); }
-  .mine .sub { color: rgba(255, 255, 255, 0.78); }
   .inv button { align-self: flex-start; }
-  .mine button { color: #fff; border-color: rgba(255, 255, 255, 0.4); background: rgba(255, 255, 255, 0.12); }
 </style>

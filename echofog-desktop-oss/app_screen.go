@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"log/slog"
@@ -22,6 +23,9 @@ const screenRole = "screen"
 
 var screenLog = slog.Default().With("component", "call-screen")
 
+// nativeScreen is the app's own screen capture of the call: the running stream, its sound capture and
+// what is needed to start the stream again at another quality. mu guards all of it; the *Locked
+// methods of App expect it held.
 type nativeScreen struct {
 	mu       sync.Mutex
 	stream   *nativecap.Stream
@@ -66,6 +70,9 @@ func (a *App) StartNativeScreen(streamID, sourceID, qualityID string, cursor boo
 	return nil
 }
 
+// startNativeScreenLocked starts the capture of a source into the stream streamID: the quality
+// preset gives the size, frame rate and bitrate, every lighter preset goes to the stream as a level it
+// can step down to, and the stream's packets go to the call as the screen role's RTP. mu must be held.
 func (a *App) startNativeScreenLocked(streamID, sourceID, qualityID string, cursor bool) error {
 	nodeAPI := a.getAPI()
 	if nodeAPI == nil {
@@ -124,6 +131,28 @@ func (a *App) startNativeScreenLocked(streamID, sourceID, qualityID string, curs
 	return nil
 }
 
+// displayRateEvery is how often the refresh rate of the screen the app's window is on is looked at.
+const displayRateEvery = 5 * time.Second
+
+// followDisplayRate tells the call the refresh rate of the screen this app's window is on, now and
+// whenever it changes (the window moved to another monitor, the mode changed), until ctx ends. The
+// broadcasters of the streams watched pick a frame rate this screen shows evenly from it; the call
+// ignores a rate it already has, and one given outside a call.
+func (a *App) followDisplayRate(ctx context.Context) {
+	t := time.NewTicker(displayRateEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if nodeAPI := a.getAPI(); nodeAPI != nil {
+				nodeAPI.SetDisplayRate(nativecap.DisplayRate())
+			}
+		}
+	}
+}
+
 // UpdateNativeScreen restarts the capture of the shared screen at another quality (size and
 // frame rate are fixed for an encoder's life); the bitrate alone follows the rate control.
 func (a *App) UpdateNativeScreen(qualityID string) error {
@@ -163,6 +192,8 @@ func (a *App) StartNativeScreenAudio() error {
 	return a.startNativeAudioLocked()
 }
 
+// startNativeAudioLocked starts the sound capture of the source being shared and feeds it to the
+// interface as 20 ms PCM events. A failure leaves the picture running without sound. mu must be held.
 func (a *App) startNativeAudioLocked() error {
 	if a.screen.stream == nil {
 		return errors.New("no native screen capture is running")
@@ -196,6 +227,7 @@ func (a *App) StopNativeScreenAudio() {
 	a.screen.mu.Unlock()
 }
 
+// stopNativeAudioLocked stops the sound capture, if it runs. mu must be held.
 func (a *App) stopNativeAudioLocked() {
 	if a.screen.audio != nil {
 		a.screen.audio.Stop()
@@ -203,6 +235,8 @@ func (a *App) stopNativeAudioLocked() {
 	}
 }
 
+// stopNativeScreenLocked stops the capture, its sound, and the call's use of it (why goes to the log);
+// the totals of a stream that goes on at another quality are kept in earlier. mu must be held.
 func (a *App) stopNativeScreenLocked(why string) {
 	a.stopNativeAudioLocked()
 	s := a.screen.stream

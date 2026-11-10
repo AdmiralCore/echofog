@@ -7,17 +7,21 @@
     import Icon from '../ui/Icon.svelte';
     import VideoView from './VideoView.svelte';
     import TileBackdrop from './TileBackdrop.svelte';
+    import { autohide } from './autohide.js';
+    import './call-ui.css';
     import { t } from '../../i18n/index.js';
 
     export let peer;
     /** camera stream of this person, if any */
     export let camera = null;
     export let compact = false;
+    /** a narrow strip: the face only, the name in the tooltip */
+    export let strip = false;
 
     const dispatch = createEventDispatcher();
     let boxH = 0;
     // the avatar shrinks with the tile so it never runs under the name label
-    $: avatarSize = Math.round(Math.max(28, Math.min(compact ? 44 : 84, boxH * 0.4 || 84)));
+    $: avatarSize = Math.round(Math.max(28, Math.min(strip ? 36 : compact ? 44 : 72, boxH * 0.4 || 84)));
 
     $: isSelf = peer === $callState.self;
     $: speaking = !!$callState.speaking[peer];
@@ -35,60 +39,55 @@
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
-    class="tile group relative w-full h-full min-h-0 rounded-xl overflow-hidden bg-[#1e1f22]"
+    class="vframe speak-ring tile"
     class:speaking
+    class:strip
+    style="background:var(--tile)"
+    title={strip ? name : undefined}
     bind:clientHeight={boxH}
+    use:autohide
     on:contextmenu|preventDefault={openMenu}
 >
-    {#if camera}
+    {#if camera && !strip}
         <VideoView stream={camera} fit="cover" mirror={isSelf} />
     {:else}
-        <TileBackdrop effect={$backdropOf(peer)} color={colorFor(peer)} {speaking} />
+        {#if !strip}<TileBackdrop effect={$backdropOf(peer)} color={colorFor(peer)} {speaking} />{/if}
         <div class="absolute inset-0 flex items-center justify-center">
-            <Avatar id={peer} {name} src={$peerAvatar(peer)} size={avatarSize} {speaking} />
+            <Avatar id={peer} {name} src={$peerAvatar(peer)} size={avatarSize} />
         </div>
     {/if}
 
-    <div class="absolute left-2 bottom-2 max-w-[calc(100%-16px)] flex items-center gap-1.5 rounded-md bg-black/60 backdrop-blur px-2 py-1 text-[13px] font-semibold text-white">
-        {#if deaf}
-            <Icon name="headphonesOff" size={14} className="text-[#f23f43]" />
-        {:else if micOff}
-            <Icon name="micOff" size={14} className="text-[#f23f43]" />
-        {:else if localMuted}
-            <Icon name="volumeOff" size={14} className="text-[#f0b232]" />
-        {/if}
-        <span class="truncate">{name}</span>
-        {#if isCoordinator && !compact}
-            <span class="text-[10px] font-bold uppercase tracking-wide text-white/50" title={$t('call.hostTitle')}>{$t('call.host')}</span>
-        {/if}
-    </div>
+    {#if !strip}
+        <div class="absolute left-2 bottom-2 max-w-[calc(100%-16px)] vtag" style="height:22px;font-size:var(--fs-xs)">
+            {#if deaf}
+                <Icon name="headphonesOff" size={13} className="text-[color:var(--danger-fg)]" />
+            {:else if micOff}
+                <Icon name="micOff" size={13} className="text-[color:var(--danger-fg)]" />
+            {:else if localMuted}
+                <Icon name="volumeOff" size={13} className="text-[color:var(--warn-fg)]" />
+            {/if}
+            <span class="truncate">{name}</span>
+            {#if isCoordinator && !compact}
+                <span class="host" title={$t('call.hostTitle')}>{$t('call.host')}</span>
+            {/if}
+        </div>
 
-    <button
-        class="more absolute right-2 top-2 w-8 h-8 p-0 border-0 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-        title={$t('call.more')}
-        aria-label={$t('call.moreFor', { name })}
-        on:click|stopPropagation={openMenu}
-    >
-        <Icon name="more" size={18} />
-    </button>
+        <button
+            class="vbtn ov absolute right-2 top-2"
+            title={$t('call.more')}
+            aria-label={$t('call.moreFor', { name })}
+            on:click|stopPropagation={openMenu}
+        >
+            <Icon name="more" size={16} />
+        </button>
+    {:else if micOff || deaf}
+        <span class="absolute right-0.5 bottom-0.5 rounded-full p-0.5" style="background:var(--surface-3);color:var(--danger-fg)">
+            <Icon name={deaf ? 'headphonesOff' : 'micOff'} size={11} />
+        </span>
+    {/if}
 </div>
 
 <style>
-    .more:hover:not(:disabled) {
-        background: rgba(0, 0, 0, 0.78);
-        border: none;
-    }
-    /* the voice ring is drawn over the video or the backdrop, not under them */
-    .tile::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        border-radius: inherit;
-        box-shadow: inset 0 0 0 3px transparent;
-        transition: box-shadow 150ms;
-        pointer-events: none;
-    }
-    .speaking::after {
-        box-shadow: inset 0 0 0 3px var(--color-success);
-    }
+    .host { font-size: 10px; font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255, 255, 255, 0.6); }
+    .strip { border-radius: var(--r-md); }
 </style>

@@ -1,7 +1,7 @@
 // Sign-in screens: profiles, unlock, create, restore, recovery phrase.
 export default {
   en: {
-    'auth.tagline': 'Messages, calls and proxy without a central server.',
+    'auth.tagline': 'Messages, calls and streams without a central server.',
     'auth.chooseProfile': 'Choose a profile',
     'auth.deleteProfile': 'Delete profile',
     'auth.deleteProfileNamed': 'Delete profile {name}',
@@ -36,7 +36,7 @@ export default {
     'auth.restore': 'Restore',
     'auth.language': 'Language',
     'auth.access.title': 'Who can find this computer',
-    'auth.access.hint': 'You can change this any time in Proxy → Access to this computer.',
+    'auth.access.hint': 'You can change this any time in VPN → Sharing → Access to this computer.',
     'auth.access.publicTitle': 'Public',
     'auth.access.publicText': 'Listed in the network like any other computer. If you share your connection, anyone can find it and use it at your price. Best for helping the network grow.',
     'auth.access.hiddenTitle': 'Hidden',
@@ -54,7 +54,7 @@ export default {
     'auth.toggleTheme': 'Toggle theme',
   },
   ru: {
-    'auth.tagline': 'Сообщения, звонки и прокси без центрального сервера.',
+    'auth.tagline': 'Сообщения, звонки и стримы без центрального сервера.',
     'auth.chooseProfile': 'Выберите профиль',
     'auth.deleteProfile': 'Удалить профиль',
     'auth.deleteProfileNamed': 'Удалить профиль {name}',
@@ -74,7 +74,7 @@ export default {
     'auth.newIdentity': 'Новая личность',
     'auth.recoveryPhrase': 'Фраза восстановления',
     'auth.createTitle': 'Создание личности',
-    'auth.createHint': 'Пароль шифрует ваши ключи на этом компьютере. Сбросить его нельзя: единственная резервная копия — фраза восстановления, которую вы увидите дальше.',
+    'auth.createHint': 'Пароль шифрует ваши ключи на этом компьютере. Пароль не восстанавливается; резервная копия — фраза восстановления, она будет показана на следующем шаге.',
     'auth.repeatPassword': 'Повторите пароль',
     'auth.creating': 'Создание…',
     'auth.restoreTitle': 'Восстановление по фразе',
@@ -89,7 +89,7 @@ export default {
     'auth.restore': 'Восстановить',
     'auth.language': 'Язык',
     'auth.access.title': 'Кто может найти этот компьютер',
-    'auth.access.hint': 'Это можно поменять в любой момент: Прокси → Доступ к этому компьютеру.',
+    'auth.access.hint': 'Это можно поменять в любой момент: VPN → Раздача → Доступ к этому компьютеру.',
     'auth.access.publicTitle': 'Публичный',
     'auth.access.publicText': 'Виден в сети, как любой другой компьютер. Если вы раздаёте подключение, его могут найти и использовать все по вашей цене. Лучше всего, чтобы помогать сети расти.',
     'auth.access.hiddenTitle': 'Скрытый',
@@ -97,7 +97,7 @@ export default {
     'auth.access.recommended': 'рекомендуем',
     'auth.access.start': 'Продолжить',
     'auth.phraseTitle': 'Ваша фраза восстановления',
-    'auth.phraseHint': 'Запишите эти слова по порядку и храните их не в сети. Кто знает фразу, тот управляет вашей личностью и кошельком. Она показывается только один раз.',
+    'auth.phraseHint': 'Запишите слова по порядку и храните вне сети. Тот, кто знает фразу, получает доступ к личности и кошельку. Фраза показывается один раз.',
     'auth.phraseSaved': 'Фраза записана',
     'auth.continue': 'Продолжить',
     'auth.tooShort': 'Минимум 8 символов.',

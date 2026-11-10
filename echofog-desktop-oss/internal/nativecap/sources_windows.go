@@ -50,6 +50,7 @@ type devMode struct {
 	_                                             [8]uint32
 }
 
+// monitorInfo is MONITORINFOEXW.
 type monitorInfo struct {
 	Size    uint32
 	Monitor rect
@@ -73,6 +74,7 @@ var (
 	})
 )
 
+// monitors lists the monitors' handles, in the system's order (the one monitor IDs count by).
 func monitors() []uintptr {
 	enumMu.Lock()
 	defer enumMu.Unlock()
@@ -123,6 +125,7 @@ func Sources() []Source {
 	return out
 }
 
+// displayMode is a monitor's current display mode, in real pixels, with its refresh rate.
 func displayMode(mi *monitorInfo) (devMode, bool) {
 	dm := devMode{Size: uint16(unsafe.Sizeof(devMode{}))}
 	r, _, _ := procEnumDisplaySettingsW.Call(uintptr(unsafe.Pointer(&mi.Device[0])), uintptr(0xFFFFFFFF), uintptr(unsafe.Pointer(&dm)))
@@ -164,6 +167,8 @@ func DisplayRate() int {
 	return 0
 }
 
+// windowSource describes a top-level window as a source, or reports false for one a person would not
+// pick (hidden, owned, a tool window, on another virtual desktop, untitled, this app's own, the shell's).
 func windowSource(h windows.HWND, self uint32, shell windows.HWND) (Source, bool) {
 	if h == shell || !windows.IsWindowVisible(h) {
 		return Source{}, false
@@ -202,6 +207,7 @@ func windowSource(h windows.HWND, self uint32, shell windows.HWND) (Source, bool
 	}, true
 }
 
+// processName is the file name of a process's program, or "" when it cannot be read.
 func processName(pid uint32) string {
 	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {

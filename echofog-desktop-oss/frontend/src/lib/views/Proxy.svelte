@@ -4,6 +4,13 @@
   import { EXIT_PROBLEMS, isSiteFailure, refusalKey, historyKey } from '../vpnreason.js';
   import { bytes, price, usdPerGb, microPerMb, when, short, amount, duration, countryName } from '../format.js';
   import Icon from '../components/ui/Icon.svelte';
+  import './skin.css';
+  import Button from '../components/ui/Button.svelte';
+  import IconButton from '../components/ui/IconButton.svelte';
+  import Input from '../components/ui/Input.svelte';
+  import Tabs from '../components/ui/Tabs.svelte';
+  import Toggle from '../components/ui/Toggle.svelte';
+  import Checkbox from '../components/ui/Checkbox.svelte';
   import SiteCheck from '../components/SiteCheck.svelte';
   import PeerList from '../components/PeerList.svelte';
   import RelayCard from '../components/RelayCard.svelte';
@@ -25,6 +32,7 @@
   let sharing = { enabled: false, config: { pricePerMb: 0, freeTestKb: 512, uploadKbps: 0, freePeers: [] }, accepted: 0, refused: 0, bytes: 0, lastPublish: 0, lastError: '', paymentsReady: false, earnedUsdt: '0' };
   let vouchers = { owedTon: '0', cashedTon: '0', quoteNano: 0 };
   let form = { price: '0', freeKb: 512, mbps: 0 };
+  let tab = 'connect'; // 'connect' | 'share'
   let mode = 'auto'; // 'auto' | 'manual' | 'direct'
   let direct = ''; // 'direct': a relay link, host:port/<peer id> or a peer ID
   let contacts = [];
@@ -339,33 +347,32 @@
     : '';
 </script>
 
-<div class="page">
-  <div class="stack">
-    <div class="page-head">
+<div class="page skin px">
+  <div class="pxwrap">
+    <header class="head">
       <div class="grow">
         <h1>{$t('proxy.title')}</h1>
         <p class="muted small">{$t('proxy.subtitle')}</p>
       </div>
-      <button class="with-icon" on:click={() => (checkingSites = true)} title={$t('proxy.checkSitesTitle')}><Icon name="globe" size={16} /> {$t('proxy.checkSites')}</button>
-    </div>
-    {#if error}<p class="error small">{error}</p>{/if}
-    {#if notice}<p class="ok small">{notice}</p>{/if}
+      <Button icon="globe" on:click={() => (checkingSites = true)} title={$t('proxy.checkSitesTitle')}>{$t('proxy.checkSites')}</Button>
+    </header>
+    {#if error}<p class="error small" role="alert">{error}</p>{/if}
+    {#if notice}<p class="ok small" role="status">{notice}</p>{/if}
 
     {#if vpn.blocked || (held && !vpn.wholeComputer)}
-      <div class="card row killed" role="alert">
-        <Icon name="lock" size={18} />
+      <div class="banner warn" role="alert">
+        <Icon name="lock" size={16} />
         <span class="grow small">{$t(vpn.blocked ? 'proxy.killBlocked' : 'proxy.killHeld')}</span>
-        <button class="killbtn" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</button>
+        <Button size="sm" variant="primary" on:click={unblock} disabled={!!busy}>{$t('proxy.killUnblock')}</Button>
       </div>
     {/if}
 
-    <div class="card stack conn" class:running={vpn.running} class:ready={vpn.running && vpn.tunnelReady} class:problem={!!exitProblem}>
+    <!-- state of the connection: always on top -->
+    <section class="card stack conn" class:running={vpn.running} class:ready={vpn.running && vpn.tunnelReady} class:problem={!!exitProblem} aria-live="polite">
       <div class="conn-top">
-        <button class="power" class:on={vpn.running} on:click={connect}
-          disabled={busy === 'connect' || blocked}
-          title={vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')} aria-label={vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')}>
-          {#if busy === 'connect'}<span class="spinner big-spin"></span>{:else}<Icon name="zap" size={26} stroke={2} />{/if}
-        </button>
+        <span class="state-ic" aria-hidden="true">
+          {#if busy === 'connect'}<span class="spinner"></span>{:else}<Icon name="zap" size={20} stroke={2} />{/if}
+        </span>
         <div class="grow">
           <h2>{vpn.running ? (vpn.tunnelReady ? $t('proxy.connected') : exitProblem ? $t('proxy.notServing') : $t('proxy.connecting')) : $t('proxy.notConnected')}</h2>
           <p class="small muted">
@@ -377,340 +384,329 @@
             {/if}
           </p>
         </div>
-        <button class={vpn.running ? 'danger' : 'primary'} on:click={connect} disabled={busy === 'connect' || blocked}>
+        <Button variant={vpn.running ? 'danger' : 'primary'} size="lg" on:click={connect} loading={busy === 'connect'} disabled={blocked}
+          title={vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')}>
           {busy === 'connect' ? $t('common.working') : vpn.running ? $t('proxy.disconnect') : $t('proxy.connect')}
-        </button>
+        </Button>
       </div>
 
       {#if vpn.running && vpn.searching}
-        <p class="small leak-warn row"><span class="spinner"></span> {$t('proxy.searching')}</p>
+        <p class="small notice warn row"><span class="spinner"></span> {$t('proxy.searchingExit')}</p>
       {:else if switchedRecently}
         <p class="small ok">{$t('proxy.switched', { to: short(vpn.lastSwitch.to), reason: $t('proxy.switchReason.' + vpn.lastSwitch.reason) })}</p>
       {/if}
       {#if exitProblem && !vpn.searching}
-        <div class="small exit-warn" role="alert">
+        <div class="small notice danger" role="alert">
           <Icon name="shield" size={14} />
           <span>{$t('proxy.exit.' + exitProblem)}
             {#if exitProblem === 'quota' && $me?.id}<span class="block">{$t('proxy.exit.yourId')} <span class="mono">{$me.id}</span>
-              <button class="icon tiny" title={$t('common.copy')} on:click={() => copy($me.id)}><Icon name="copy" size={12} /></button></span>{/if}
+              <IconButton icon="copy" size="sm" label={$t('common.copy')} on:click={() => copy($me.id)} /></span>{/if}
           </span>
         </div>
       {/if}
       {#if refusalText}<p class="small faint">{refusalText}</p>{/if}
+
       {#if vpn.running}
         <div class="stats">
           <div class="stat"><span class="eyebrow">{$t('proxy.socks')}</span>
-            <span class="row"><span class="mono">{vpn.listenAddr}</span><button class="icon tiny" title={$t('common.copy')} on:click={copyAddr}><Icon name={copied ? 'check' : 'copy'} size={14} /></button></span></div>
+            <span class="row"><span class="mono">{vpn.listenAddr}</span><IconButton icon={copied ? 'check' : 'copy'} size="sm" label={$t('common.copy')} on:click={copyAddr} /></span></div>
           <div class="stat"><span class="eyebrow">{$t('proxy.received')}</span><span class="num"><Icon name="download" size={14} /> {bytes(vpn.bytesRx, $lang)}</span></div>
           <div class="stat"><span class="eyebrow">{$t('proxy.sent')}</span><span class="num"><Icon name="upload" size={14} /> {bytes(vpn.bytesTx, $lang)}</span></div>
         </div>
-        {#if vpn.wholeComputerSupported}
-          <label class="row opt">
-            <span class="grow">{$t('proxy.whole')}<span class="small muted block">{$t('proxy.wholeAdmin')}</span></span>
-            <input type="checkbox" class="switch" checked={vpn.wholeComputer} disabled={busy === 'whole'} on:change={wholeComputer} />
-          </label>
-          <label class="row opt">
-            <span class="grow">{$t('proxy.killSwitch')}<span class="small muted block">{$t('proxy.killSwitchHint')}</span></span>
-            <input type="checkbox" class="switch" checked={vpn.killSwitch} disabled={busy === 'kill'} on:change={(e) => setKillSwitch(e.target.checked)} />
-          </label>
+      {:else if lastExit}
+        <div class="row last-exit">
+          <Button size="sm" icon="zap" on:click={connectLast} disabled={!!busy}>{$t('proxy.last.connect')}</Button>
+          <span class="small faint">{$t('proxy.last.hint', { id: exitName(saved.find((e) => e.peerId === lastExit.peerId) || lastExit), when: when(lastExit.endedAt || lastExit.startedAt, $lang) })}</span>
+        </div>
+      {/if}
+
+      <div class="opts">
+        {#if vpn.running && vpn.wholeComputerSupported}
+          <Toggle label={$t('proxy.whole')} hint={$t('proxy.wholeAdmin')} checked={vpn.wholeComputer} disabled={busy === 'whole'} on:change={wholeComputer} />
+          <Toggle label={$t('proxy.killSwitch')} hint={$t('proxy.killSwitchHint')} checked={vpn.killSwitch} disabled={busy === 'kill'} on:change={(e) => setKillSwitch(e.detail)} />
           {#if vpn.wholeComputer}
-            <p class="small leak-warn"><Icon name="shield" size={14} /> {$t(vpn.killSwitch ? 'proxy.killSwitchLimits' : 'proxy.wholeLeakWarning')}</p>
+            <p class="small notice warn"><Icon name="shield" size={14} /> {$t(vpn.killSwitch ? 'proxy.killSwitchLimits' : 'proxy.wholeLeakWarning')}</p>
           {/if}
           {#if vpn.wholeComputerError}<p class="small error">{vpn.wholeComputerError}</p>{/if}
         {/if}
-        <label class="row opt" title={$t('proxy.autoSwitchHint')}>
-          <span class="grow">{$t('proxy.autoSwitch')}<span class="small muted block">{$t('proxy.autoSwitchHint')}</span></span>
-          <input type="checkbox" class="switch" checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.target.checked)} />
-        </label>
-      {:else}
-        {#if lastExit}
-          <div class="row last-exit">
-            <button class="ghost with-icon" on:click={connectLast} disabled={!!busy}><Icon name="zap" size={14} /> {$t('proxy.last.connect')}</button>
-            <span class="small faint">{$t('proxy.last.hint', { id: exitName(saved.find((e) => e.peerId === lastExit.peerId) || lastExit), when: when(lastExit.endedAt || lastExit.startedAt, $lang) })}</span>
-          </div>
-        {/if}
-        <div class="seg" role="tablist">
-          <button role="tab" class:active={mode === 'auto'} aria-selected={mode === 'auto'} on:click={() => (mode = 'auto')}>{$t('proxy.mode.auto')}</button>
-          <button role="tab" class:active={mode === 'manual'} aria-selected={mode === 'manual'} on:click={() => (mode = 'manual')}>{$t('proxy.mode.manual')}</button>
-          <button role="tab" class:active={mode === 'direct'} aria-selected={mode === 'direct'} on:click={() => (mode = 'direct')}>{$t('proxy.mode.direct')}</button>
-        </div>
-
-        {#if mode === 'auto'}
-          <div class="auto">
-            <p class="small muted">{$t('proxy.autoBefore')}<b>{$t('proxy.checkSites')}</b>{$t('proxy.autoAfter')}</p>
-            {#if best}
-              <div class="exit pick-preview">
-                <span class="ex-ic"><Icon name="globe" size={16} /></span>
-                <span class="id mono">{whereExit(best)}</span>
-                <span class="chip ping {pingClass(best.latencyMs)}">{pingText(best.latencyMs)}</span>
-                <span class="chip">{best.pricePerMb ? price(best.pricePerMb, $lang) : $t('common.Free')}</span>
-                <span class="chip">{speed(best) ? mbit(best) : $t('proxy.speedUnknown')}</span>
-                <span class="chip">{sitesText(best)}</span>
-                <span class="grow" />
-                <span class="small faint">{$t('proxy.currentBest')}</span>
-              </div>
-            {:else}
-              <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> {$t('proxy.looking')}{:else}{$t('proxy.noExits')}{/if}</p>
-            {/if}
-          </div>
-        {:else if mode === 'direct'}
-          <div class="auto">
-            <p class="small muted">{$t('proxy.directHint')}</p>
-            <p class="small faint">{$t('proxy.externalExit')}</p>
-            <input bind:value={direct} placeholder="echofog://join?… / echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
-            {#if isInvite && inviteErr}<p class="small error">{inviteErr}</p>
-            {:else if isInvite && invite}<p class="small faint">{invite.private ? $t('access.private') : $t('access.publicNode')} · <span class="mono">{short(invite.peerId)}</span></p>
-            {:else if direct.trim() && !directId && !isInvite}<p class="small error">{$t('proxy.directBad')}</p>{/if}
-          </div>
-        {:else}
-          <div class="row small sortrow">
-            <span class="faint">{$t('proxy.sort')}</span>
-            {#each ['best', 'ping', 'price', 'speed'] as k}
-              <button class="chip-btn" class:on={sortBy === k} on:click={() => (sortBy = k)}>{$t('proxy.sort.' + k)}</button>
-            {/each}
-          </div>
-          <div class="exits" role="radiogroup" aria-label={$t('proxy.exits')}>
-            {#each sorted as e (e.peerId)}
-              <div class="exit" class:sel={selected === e.peerId} role="radio" aria-checked={selected === e.peerId} tabindex="0"
-                on:click={() => (selected = e.peerId)} on:keydown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && (selected = e.peerId)}>
-                <span class="radio" />
-                <span class="id mono">{short(e.peerId)}</span>
-                <span class="chip ping {pingClass(e.latencyMs)}" title={$t('proxy.pingTitle')}>{pingText(e.latencyMs)}</span>
-                <span class="chip" title={$t('proxy.priceTitle')}>{e.pricePerMb ? price(e.pricePerMb, $lang) : $t('common.Free')}</span>
-                <span class="chip" title={e.measuredKbps ? $t('proxy.measured') : $t('proxy.claimed')}>{speed(e) ? (e.measuredKbps ? '' : '~') + mbit(e) : $t('proxy.speedUnknown')}</span>
-                <span class="chip" title={$t('proxy.sitesTitle')}>{sitesText(e)}</span>
-                {#if e.paymentRequired}<span class="chip warn">{$t('proxy.needsPayment')}</span>{/if}
-                <span class="grow" />
-                <button class="ghost small" on:click|stopPropagation={() => probe(e.peerId)} disabled={!!busy}>{busy === 'probe:' + e.peerId ? $t('proxy.testing') : $t('proxy.test')}</button>
-              </div>
-            {:else}
-              <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> {$t('proxy.looking')}{:else}{$t('proxy.noExits')}{/if}</p>
-            {/each}
-          </div>
-        {/if}
-        {#if target && target.pricePerMb > 0}
-          <div class="paid-ahead small">
-            <b class="row"><Icon name="coin" size={14} /> {$t('proxy.paidAhead.title', { price: price(target.pricePerMb, $lang) })}</b>
-            <TestnetNotice compact />
-            <span>{$t('proxy.paidAhead.free', { kb: target.freeTestKb || 0 })} {#if mode === 'auto'}{$t('proxy.paidAhead.auto')}{/if}</span>
-            <span>{$t('proxy.paidAhead.where')}
-              <span class="tip" title={$t('proxy.pay.srcDepositTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcDeposit')}</span>
-              <span class="tip" title={$t('proxy.pay.srcWalletTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcWallet')}</span>
-            </span>
-            <label class="row opt">
-              <input type="checkbox" checked={pay.autoPay} disabled={busy === 'autopay'} on:change={(e) => saveAutoPay(e.target.checked)} />
-              <span class="grow">{$t('proxy.paidAhead.autoPay', { cap: payForm.cap })}</span>
-            </label>
-          </div>
-        {/if}
-        <label class="row opt" title={$t('proxy.autoSwitchHint')}>
-          <span class="grow">{$t('proxy.autoSwitch')}<span class="small muted block">{$t('proxy.autoSwitchHint')}</span></span>
-          <input type="checkbox" class="switch" checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.target.checked)} />
-        </label>
-        {#if mode !== 'direct'}<div><button class="ghost small with-icon" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}><Icon name="refresh" size={14} /> {busy === 'scan' ? $t('proxy.searching') : $t('proxy.searchAgain')}</button></div>{/if}
-      {/if}
-    </div>
-
-    <div class="card stack">
-      <div class="card-head row">
-        <div class="grow">
-          <h2>{$t('proxy.hist.title')}</h2>
-          <p class="small muted">{$t('proxy.hist.subtitle')}</p>
-        </div>
-        {#if history.length}<button class="ghost small" on:click={clearHistory} disabled={!!busy}>{$t('proxy.hist.clear')}</button>{/if}
+        <Toggle label={$t('proxy.autoSwitch')} hint={$t('proxy.autoSwitchHint')} checked={vpn.autoSwitch} disabled={busy === 'autoswitch'} on:change={(e) => setAutoSwitch(e.detail)} />
       </div>
-      {#if saved.length}
-        <div class="hist">
-          {#each shownExits as e (e.peerId)}
-            <div class="hist-row" class:active={e.active} class:fav={e.favorite}>
-              <div class="hist-main">
-                <span class="row">
-                  <button class="icon tiny star" class:on={e.favorite} title={e.favorite ? $t('proxy.hist.unstar') : $t('proxy.hist.star')} aria-label={e.favorite ? $t('proxy.hist.unstar') : $t('proxy.hist.star')} on:click={() => toggleStar(e)} disabled={!!busy}>
-                    <Icon name="star" size={15} fill={e.favorite ? 'currentColor' : 'none'} />
-                  </button>
-                  {#if renaming === e.peerId}
-                    <!-- svelte-ignore a11y-autofocus -->
-                    <input class="name-input" bind:value={nameDraft} maxlength="40" placeholder={$t('proxy.hist.namePlaceholder')} autofocus
-                      on:keydown={(ev) => { if (ev.key === 'Enter') saveName(e); if (ev.key === 'Escape') renaming = ''; }} on:blur={() => saveName(e)} />
-                  {:else}
-                    <b class:mono={!e.name && !contactName(e.peerId)} title={e.peerId}>{exitName(e)}</b>
-                    <button class="icon tiny" title={$t('proxy.hist.rename')} aria-label={$t('proxy.hist.rename')} on:click={() => startRename(e)}><Icon name="edit" size={13} /></button>
-                  {/if}
-                  {#if e.active}<span class="chip ok-chip">{$t('proxy.hist.now')}</span>{/if}
-                  {#if e.lastState && e.lastState !== 'ok'}<span class="chip warn">{$t('proxy.hist.state.' + e.lastState)}</span>{/if}
-                </span>
-                {#if e.countryCode}
-                  <span class="small loc" title={e.addr}><Icon name="globe" size={12} /> {countryName(e.countryCode)}{e.city ? ', ' + e.city : ''}</span>
-                {/if}
-                <span class="small faint">
-                  {e.lastUsed ? when(e.lastUsed, $lang) : $t('proxy.hist.never')}{e.addr ? ' · ' + e.addr : ''}
-                  {#if e.sessions}· <button class="linkish" on:click={() => (openExit = openExit === e.peerId ? '' : e.peerId)}>{$t('proxy.hist.sessions', { n: e.sessions })}</button>{/if}
-                </span>
-              </div>
-              <div class="hist-stats small">
-                <span title={$t('proxy.received')}><Icon name="download" size={12} /> {bytes(e.bytesRx, $lang)}</span>
-                <span title={$t('proxy.sent')}><Icon name="upload" size={12} /> {bytes(e.bytesTx, $lang)}</span>
-                {#if e.sessions}<span class="faint">{e.lastReadyMs ? $t('proxy.hist.ready', { s: (e.lastReadyMs / 1000).toFixed(1) }) : $t('proxy.hist.neverReady')}</span>{/if}
-                {#if e.refused && !refusals(e).known}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.refused', { n: e.refused })}</span>{/if}
-                {#if refusals(e).exit}<span class="warn-text" title={refusals(e).title}>{$t('proxy.hist.exitFails', { n: refusals(e).exit })}</span>{/if}
-                {#if refusals(e).site}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.siteFails', { n: refusals(e).site })}</span>{/if}
-                <span class="faint">{priceText(e)}</span>
-                {#if e.remainingAt && e.remaining >= 0}<span class="left" title={leftTitle(e)}>{leftText(e)}</span>{/if}
-              </div>
-              <div class="hist-actions">
-                <button class="icon tiny" title={$t('proxy.hist.copyLink')} aria-label={$t('proxy.hist.copyLink')} on:click={() => copyLink(e)}><Icon name={copiedLink === e.peerId ? 'check' : 'copy'} size={14} /></button>
-                <button class="icon tiny" title={$t('proxy.hist.forget')} aria-label={$t('proxy.hist.forget')} on:click={() => forget(e)} disabled={!!busy || e.active}><Icon name="trash" size={14} /></button>
-                {#if !(vpn.running && vpn.relayPeerId === e.peerId)}
-                  <button class="ghost small" on:click={() => connectTo(e)} disabled={!!busy}>{$t('proxy.hist.connect')}</button>
-                {/if}
-              </div>
-              {#if openExit === e.peerId}
-                <div class="sessions small">
-                  {#each sessionsOf(e.peerId) as h (h.id || h.peerId + h.startedAt)}
-                    <div class="session">
-                      <span>{when(h.startedAt, $lang)} · {duration(sessionSeconds(h))}{h.endReason ? ' · ' + $t('proxy.hist.end.' + h.endReason) : h.active ? ' · ' + $t('proxy.hist.now') : ''}</span>
-                      <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}{#if h.remainingAt && h.remaining >= 0}<span title={leftTitle(h)}> · {leftText(h)}</span>{/if}</span>
-                    </div>
-                  {/each}
+    </section>
+
+    <Tabs label={$t('proxy.title')} bind:value={tab}
+      items={[{ id: 'connect', label: $t('proxy.tab.connect') }, { id: 'share', label: $t('proxy.tab.share') }]} />
+
+    {#if tab === 'connect'}
+      {#if !vpn.running}
+        <section class="card stack">
+          <div class="card-head">
+            <span class="ico"><Icon name="globe" size={16} /></span>
+            <div class="grow"><h2>{$t('proxy.chooseExit')}</h2></div>
+            {#if mode !== 'direct'}<Button size="sm" variant="ghost" icon="refresh" on:click={() => act('scan', () => loadExits(true))} disabled={!!busy}>{busy === 'scan' ? $t('proxy.searching') : $t('proxy.searchAgain')}</Button>{/if}
+          </div>
+          <Tabs variant="segment" label={$t('proxy.chooseExit')} bind:value={mode}
+            items={[{ id: 'auto', label: $t('proxy.mode.auto') }, { id: 'manual', label: $t('proxy.mode.manual') }, { id: 'direct', label: $t('proxy.mode.direct') }]} />
+
+          {#if mode === 'auto'}
+            <div class="auto">
+              <p class="small muted">{$t('proxy.autoBefore')}<b>{$t('proxy.checkSites')}</b>{$t('proxy.autoAfter')}</p>
+              {#if best}
+                <div class="exit pick-preview">
+                  <span class="ex-ic"><Icon name="globe" size={16} /></span>
+                  <span class="id mono">{whereExit(best)}</span>
+                  <span class="chip ping {pingClass(best.latencyMs)}">{pingText(best.latencyMs)}</span>
+                  <span class="chip">{best.pricePerMb ? price(best.pricePerMb, $lang) : $t('common.Free')}</span>
+                  <span class="chip">{speed(best) ? mbit(best) : $t('proxy.speedUnknown')}</span>
+                  <span class="chip">{sitesText(best)}</span>
+                  <span class="grow"></span>
+                  <span class="small faint">{$t('proxy.currentBest')}</span>
                 </div>
+              {:else}
+                <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> {$t('proxy.looking')}{:else}{$t('proxy.noExits')}{/if}</p>
               {/if}
             </div>
-          {/each}
-        </div>
-        {#if saved.length > 6}
-          <div><button class="ghost small" on:click={() => (showAllHistory = !showAllHistory)}>{showAllHistory ? $t('proxy.hist.showLess') : $t('proxy.hist.showAll', { n: saved.length })}</button></div>
-        {/if}
-      {:else}
-        <p class="small faint">{$t('proxy.hist.empty')}</p>
-      {/if}
-    </div>
-
-    {#if vpn.running && pay.active && Number(pay.pricePerGb) > 0}
-      <div class="card stack">
-        <div class="card-head">
-          <span class="ico"><Icon name="coin" size={18} /></span>
-          <div class="grow">
-            <h2>{$t('proxy.pay.title')} {#if pay.paysByVault}<span class="chip ok live-chip">{$t('proxy.pay.fromDeposit')}</span>{/if}</h2>
-            <p class="small muted">
-              {$t('proxy.pay.perGb', { price: pay.pricePerGb })} {pay.remainingGb > 0 ? $t('proxy.pay.left', { gb: pay.remainingGb.toFixed(2) }) : $t('proxy.pay.noneLeft')}
-              {pay.pending ? $t('proxy.pay.pending') : ''}
-              {$t('proxy.pay.spent', { amount: pay.spentTodayUsdt })}
-              {#if pay.paysByVault}{$t('proxy.pay.vaultNote')}{/if}
-            </p>
-          </div>
-        </div>
-        <TestnetNotice compact />
-        {#if pay.needsPayment || pay.remainingGb <= 0}<p class="small leak-warn">{$t('proxy.pay.needLead')}</p>{/if}
-        <div class="row wrap paywith">
-          <span class="small muted">{$t('proxy.pay.source')}</span>
-          <span class="src" class:on={pay.paysByVault} title={$t('proxy.pay.srcDepositTip')}><Icon name="lock" size={13} /> {$t('proxy.pay.srcDeposit')} <Icon name="info" size={12} /></span>
-          <span class="src" class:on={!pay.paysByVault} title={$t('proxy.pay.srcWalletTip')}><Icon name="wallet" size={13} /> {$t('proxy.pay.srcWallet')} <Icon name="info" size={12} /></span>
-          <button class="ghost small" on:click={topUpDeposit}>{$t('proxy.pay.topUpDeposit')}</button>
-        </div>
-        <details class="small muted diff">
-          <summary>{$t('proxy.pay.diffTitle')}</summary>
-          <p>{$t('proxy.pay.diffBody')}</p>
-        </details>
-        {#if pay.note}<p class="note">{pay.note}</p>{/if}
-        {#if pay.lastError}<p class="small error">{pay.lastError}</p>{/if}
-        <div class="row wrap paywith">
-          <span class="small muted">{$t('proxy.pay.with')}</span>
-          <div class="seg" role="radiogroup" aria-label={$t('proxy.pay.with')}>
-            {#each [['auto', $t('proxy.pay.auto')], ['TON', 'TON'], ['USDT', 'USDT']] as [k, label]}
-              <button role="radio" aria-checked={pay.payAsset === k} class:active={pay.payAsset === k}
-                disabled={busy === 'asset' || (k === 'TON' && !pay.takesTon)}
-                title={k === 'auto' ? $t('proxy.pay.autoTitle') : k === 'TON' && !pay.takesTon ? $t('proxy.pay.usdtOnly') : ''}
-                on:click={() => setAsset(k)}>{label}</button>
-            {/each}
-          </div>
-          {#if pay.chunkTon && pay.payAsset !== 'USDT' && pay.takesTon}<span class="small faint">{$t('proxy.pay.tonNow', { usd: payForm.chunk, ton: pay.chunkTon })}</span>{/if}
-        </div>
-        <div class="row wrap">
-          <label>{$t('proxy.pay.chunk')}<input bind:value={payForm.chunk} on:input={() => (payTouched = true)} /></label>
-          <label>{$t('proxy.pay.cap')}<input bind:value={payForm.cap} on:input={() => (payTouched = true)} /></label>
-        </div>
-        <label class="row opt">
-          <span class="grow">{$t('proxy.pay.autoPay')}</span>
-          <input type="checkbox" class="switch" checked={pay.autoPay} disabled={busy === 'autopay'} on:change={(e) => saveAutoPay(e.target.checked)} />
-        </label>
-        <div class="row">
-          <button class="primary" on:click={() => payNow(payForm.chunk)} disabled={!pay.canPay || busy === 'pay'}>
-            {busy === 'pay' ? $t('proxy.pay.sending') : $t('proxy.pay.now', { amount: payForm.chunk })}
-          </button>
-          {#if payTouched}<button on:click={() => saveAutoPay(pay.autoPay)} disabled={!!busy}>{$t('proxy.pay.save')}</button>{/if}
-        </div>
-      </div>
-    {/if}
-
-    <div class="card stack" class:sharing={sharing.enabled}>
-      <div class="card-head">
-        <span class="ico" class:ok={sharing.enabled}><Icon name="upload" size={18} /></span>
-        <div class="grow">
-          <h2>{$t('proxy.share.title')} {#if sharing.enabled}<span class="chip ok live-chip"><span class="pulse"></span> {$t('proxy.share.live')}</span>{/if}</h2>
-          <p class="small muted">{$t('proxy.share.hint')}</p>
-        </div>
-        <button class={sharing.enabled ? 'danger' : 'primary'} on:click={share} disabled={busy === 'share'}>
-          {busy === 'share' ? $t('common.working') : sharing.enabled ? $t('proxy.share.stop') : $t('proxy.share.start')}
-        </button>
-      </div>
-      {#if sharing.enabled}
-        <div class="stats">
-          <div class="stat"><span class="eyebrow">{$t('proxy.share.price')}</span><span class="num">{price(sharing.config.pricePerMb, $lang)}</span></div>
-          <div class="stat"><span class="eyebrow">{$t('proxy.share.sessions')}</span><span class="num">{sharing.accepted} <span class="faint small">{$t('proxy.share.refused', { n: sharing.refused })}</span></span></div>
-          <div class="stat"><span class="eyebrow">{$t('proxy.share.carried')}</span><span class="num">{bytes(sharing.bytes, $lang)}</span></div>
-          {#if sharing.paymentsReady}<div class="stat"><span class="eyebrow">{$t('proxy.share.earned')}</span><span class="num ok">${sharing.earnedUsdt}</span></div>{/if}
-        </div>
-        {#if accessMode === 'public'}
-          <p class="small faint">{$t('proxy.share.published', { when: sharing.lastPublish ? when(sharing.lastPublish, $lang) : $t('proxy.share.notYet') })}</p>
-        {:else}
-          <p class="small faint">{$t('access.sharedHidden')}</p>
-        {/if}
-        {#if sharing.lastError}<p class="small error">{sharing.lastError}</p>{/if}
-      {/if}
-      {#if (sharing.enabled && sharing.paymentsReady) || Number(vouchers.owedTon) > 0 || Number(vouchers.cashedTon) > 0}
-        <div class="sub">
-          <div class="eyebrow">{$t('proxy.share.deposits')}</div>
-          <div class="stats">
-            <div class="stat"><span class="eyebrow">{$t('proxy.share.owed')}</span><span class="num">{amount(vouchers.owedTon, $lang)} TON</span></div>
-            <div class="stat"><span class="eyebrow">{$t('proxy.share.collected')}</span><span class="num ok">{amount(vouchers.cashedTon, $lang)} TON</span></div>
-          </div>
-          <TestnetNotice compact />
-          {#if vouchers.claimProblem}
-            <div class="small exit-warn" role="alert">
-              <Icon name="coin" size={14} />
-              <span>{$t('proxy.share.noGas', { owed: amount(vouchers.owedTon, $lang) })}
-                {#if vouchers.walletAddr}<span class="block mono">{vouchers.walletAddr}
-                  <button class="icon tiny" title={$t('common.copy')} on:click={() => copy(vouchers.walletAddr)}><Icon name="copy" size={12} /></button></span>{/if}
-              </span>
+          {:else if mode === 'direct'}
+            <div class="auto">
+              <p class="small muted">{$t('proxy.directHint')}</p>
+              <p class="small faint">{$t('proxy.externalExit')}</p>
+              <Input bind:value={direct} aria-label={$t('proxy.directHint')} placeholder="echofog://join?… / echofog://relay/host:port/peer-id" on:keydown={(e) => e.key === 'Enter' && !blocked && connect()} />
+              {#if isInvite && inviteErr}<p class="small error">{inviteErr}</p>
+              {:else if isInvite && invite}<p class="small faint">{invite.private ? $t('access.private') : $t('access.publicNode')} · <span class="mono">{short(invite.peerId)}</span></p>
+              {:else if direct.trim() && !directId && !isInvite}<p class="small error">{$t('proxy.directBad')}</p>{/if}
+            </div>
+          {:else}
+            <div class="row small sortrow">
+              <span class="faint">{$t('proxy.sort')}</span>
+              {#each ['best', 'ping', 'price', 'speed'] as k}
+                <button class="chip-btn" class:on={sortBy === k} aria-pressed={sortBy === k} on:click={() => (sortBy = k)}>{$t('proxy.sort.' + k)}</button>
+              {/each}
+            </div>
+            <div class="exits" role="radiogroup" aria-label={$t('proxy.exits')}>
+              {#each sorted as e (e.peerId)}
+                <div class="exit" class:sel={selected === e.peerId} role="radio" aria-checked={selected === e.peerId} tabindex="0"
+                  on:click={() => (selected = e.peerId)} on:keydown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && (ev.preventDefault(), (selected = e.peerId))}>
+                  <span class="radio"></span>
+                  <span class="id mono">{short(e.peerId)}</span>
+                  <span class="chip ping {pingClass(e.latencyMs)}" title={$t('proxy.pingTitle')}>{pingText(e.latencyMs)}</span>
+                  <span class="chip" title={$t('proxy.priceTitle')}>{e.pricePerMb ? price(e.pricePerMb, $lang) : $t('common.Free')}</span>
+                  <span class="chip" title={e.measuredKbps ? $t('proxy.measured') : $t('proxy.claimed')}>{speed(e) ? (e.measuredKbps ? '' : '~') + mbit(e) : $t('proxy.speedUnknown')}</span>
+                  <span class="chip" title={$t('proxy.sitesTitle')}>{sitesText(e)}</span>
+                  {#if e.paymentRequired}<span class="chip warn">{$t('proxy.needsPayment')}</span>{/if}
+                  <span class="grow"></span>
+                  <Button size="sm" variant="ghost" on:click={(ev) => { ev.stopPropagation(); probe(e.peerId); }} disabled={!!busy}>{busy === 'probe:' + e.peerId ? $t('proxy.testing') : $t('proxy.test')}</Button>
+                </div>
+              {:else}
+                <p class="small faint row">{#if busy === 'scan'}<span class="spinner"></span> {$t('proxy.looking')}{:else}{$t('proxy.noExits')}{/if}</p>
+              {/each}
             </div>
           {/if}
-          <p class="small muted">{$t('proxy.share.depositNote')}</p>
-        </div>
-      {/if}
-      <ExitAccessCard access={sharing.access} enabled={sharing.enabled} on:change={refresh} />
-      {#if !sharing.enabled && !sharing.access}
-        <div class="row wrap">
-          <label>{$t('proxy.share.priceLabel')}<input bind:value={form.price} /></label>
-          <label>{$t('proxy.share.freeKb')}<input type="number" min="0" max="1024" bind:value={form.freeKb} /></label>
-          <label>{$t('proxy.share.upload')}<input type="number" min="0" bind:value={form.mbps} /></label>
-          <button class="measure" on:click={measure} disabled={!!busy}>{busy === 'measure' ? $t('proxy.share.measuring') : $t('proxy.share.measure')}</button>
-        </div>
-        <p class="note">
-          {$t('proxy.share.legal')}
-          {$t('proxy.share.wallet')}
-        </p>
-      {/if}
-      <div class="sub">
-        <div class="eyebrow">{$t('proxy.share.freeFor')}</div>
-        <p class="small muted">{$t('proxy.share.freeHint')}</p>
-        <PeerList ids={sharing.config.freePeers || []} {contacts} disabled={busy === 'free'} label={$t('proxy.share.freeFor')}
-          empty={$t('proxy.share.freeEmpty')} on:change={(e) => setFreePeers(e.detail)} />
-      </div>
-    </div>
 
-    <AccessCard {contacts} />
+          {#if target && target.pricePerMb > 0}
+            <div class="paid-ahead small">
+              <b class="row"><Icon name="coin" size={14} /> {$t('proxy.paidAhead.title', { price: price(target.pricePerMb, $lang) })}</b>
+              <TestnetNotice compact />
+              <span>{$t('proxy.paidAhead.free', { kb: target.freeTestKb || 0 })} {#if mode === 'auto'}{$t('proxy.paidAhead.auto')}{/if}</span>
+              <span>{$t('proxy.paidAhead.where')}
+                <span class="tip" title={$t('proxy.pay.srcDepositTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcDeposit')}</span>
+                <span class="tip" title={$t('proxy.pay.srcWalletTip')}><Icon name="info" size={13} /> {$t('proxy.pay.srcWallet')}</span>
+              </span>
+              <Checkbox checked={pay.autoPay} disabled={busy === 'autopay'} on:change={(e) => saveAutoPay(e.target.checked)} label={$t('proxy.paidAhead.autoPay', { cap: payForm.cap })} />
+            </div>
+          {/if}
+        </section>
+      {/if}
 
-    <RelayCard {contacts} />
+      {#if vpn.running && pay.active && Number(pay.pricePerGb) > 0}
+        <section class="card stack">
+          <div class="card-head">
+            <span class="ico"><Icon name="coin" size={16} /></span>
+            <div class="grow">
+              <h2>{$t('proxy.pay.title')} {#if pay.paysByVault}<span class="chip ok live-chip">{$t('proxy.pay.fromDeposit')}</span>{/if}</h2>
+              <p class="small muted">
+                {$t('proxy.pay.perGb', { price: pay.pricePerGb })} {pay.remainingGb > 0 ? $t('proxy.pay.left', { gb: pay.remainingGb.toFixed(2) }) : $t('proxy.pay.noneLeft')}
+                {pay.pending ? $t('proxy.pay.pending') : ''}
+                {$t('proxy.pay.spent', { amount: pay.spentTodayUsdt })}
+                {#if pay.paysByVault}{$t('proxy.pay.vaultNote')}{/if}
+              </p>
+            </div>
+          </div>
+          <TestnetNotice compact />
+          {#if pay.needsPayment || pay.remainingGb <= 0}<p class="small notice warn">{$t('proxy.pay.needLead')}</p>{/if}
+          <div class="row wrap paywith">
+            <span class="small muted">{$t('proxy.pay.source')}</span>
+            <span class="src" class:on={pay.paysByVault} title={$t('proxy.pay.srcDepositTip')}><Icon name="lock" size={13} /> {$t('proxy.pay.srcDeposit')} <Icon name="info" size={12} /></span>
+            <span class="src" class:on={!pay.paysByVault} title={$t('proxy.pay.srcWalletTip')}><Icon name="wallet" size={13} /> {$t('proxy.pay.srcWallet')} <Icon name="info" size={12} /></span>
+            <Button size="sm" variant="ghost" on:click={topUpDeposit}>{$t('proxy.pay.topUpDeposit')}</Button>
+          </div>
+          <details class="small muted diff">
+            <summary>{$t('proxy.pay.diffTitle')}</summary>
+            <p>{$t('proxy.pay.diffBody')}</p>
+          </details>
+          {#if pay.note}<p class="note">{pay.note}</p>{/if}
+          {#if pay.lastError}<p class="small error">{pay.lastError}</p>{/if}
+          <div class="row wrap paywith">
+            <span class="small muted">{$t('proxy.pay.with')}</span>
+            <Tabs variant="segment" label={$t('proxy.pay.with')} value={pay.payAsset} on:change={(e) => setAsset(e.detail)}
+              items={[['auto', $t('proxy.pay.auto')], ['TON', 'TON'], ['USDT', 'USDT']].map(([k, label]) => ({ id: k, label, disabled: busy === 'asset' || (k === 'TON' && !pay.takesTon) }))} />
+            {#if pay.chunkTon && pay.payAsset !== 'USDT' && pay.takesTon}<span class="small faint">{$t('proxy.pay.tonNow', { usd: payForm.chunk, ton: pay.chunkTon })}</span>{/if}
+          </div>
+          <div class="row wrap fields">
+            <div class="grow"><Input label={$t('proxy.pay.chunk')} bind:value={payForm.chunk} on:input={() => (payTouched = true)} /></div>
+            <div class="grow"><Input label={$t('proxy.pay.cap')} bind:value={payForm.cap} on:input={() => (payTouched = true)} /></div>
+          </div>
+          <Toggle label={$t('proxy.pay.autoPay')} checked={pay.autoPay} disabled={busy === 'autopay'} on:change={(e) => saveAutoPay(e.detail)} />
+          <div class="row">
+            <Button variant="primary" on:click={() => payNow(payForm.chunk)} disabled={!pay.canPay || busy === 'pay'} loading={busy === 'pay'}>
+              {busy === 'pay' ? $t('proxy.pay.sending') : $t('proxy.pay.now', { amount: payForm.chunk })}
+            </Button>
+            {#if payTouched}<Button on:click={() => saveAutoPay(pay.autoPay)} disabled={!!busy}>{$t('proxy.pay.save')}</Button>{/if}
+          </div>
+        </section>
+      {/if}
+
+      <section class="card stack">
+        <div class="card-head">
+          <span class="ico"><Icon name="clock" size={16} /></span>
+          <div class="grow">
+            <h2>{$t('proxy.hist.title')}</h2>
+            <p class="small muted">{$t('proxy.hist.subtitle')}</p>
+          </div>
+          {#if history.length}<Button size="sm" variant="ghost" on:click={clearHistory} disabled={!!busy}>{$t('proxy.hist.clear')}</Button>{/if}
+        </div>
+        {#if saved.length}
+          <div class="hist">
+            {#each shownExits as e (e.peerId)}
+              <div class="hist-row" class:active={e.active} class:fav={e.favorite}>
+                <div class="hist-main">
+                  <span class="row">
+                    <IconButton icon="star" size="sm" variant={e.favorite ? 'accent' : 'ghost'} pressed={e.favorite} label={e.favorite ? $t('proxy.hist.unstar') : $t('proxy.hist.star')} on:click={() => toggleStar(e)} disabled={!!busy} />
+                    {#if renaming === e.peerId}
+                      <!-- svelte-ignore a11y-autofocus -->
+                      <input class="name-input" bind:value={nameDraft} maxlength="40" placeholder={$t('proxy.hist.namePlaceholder')} aria-label={$t('proxy.hist.rename')} autofocus
+                        on:keydown={(ev) => { if (ev.key === 'Enter') saveName(e); if (ev.key === 'Escape') renaming = ''; }} on:blur={() => saveName(e)} />
+                    {:else}
+                      <b class:mono={!e.name && !contactName(e.peerId)} title={e.peerId}>{exitName(e)}</b>
+                      <IconButton icon="edit" size="sm" label={$t('proxy.hist.rename')} on:click={() => startRename(e)} />
+                    {/if}
+                    {#if e.active}<span class="chip ok">{$t('proxy.hist.now')}</span>{/if}
+                    {#if e.lastState && e.lastState !== 'ok'}<span class="chip warn">{$t('proxy.hist.state.' + e.lastState)}</span>{/if}
+                  </span>
+                  {#if e.countryCode}
+                    <span class="small loc" title={e.addr}><Icon name="globe" size={12} /> {countryName(e.countryCode)}{e.city ? ', ' + e.city : ''}</span>
+                  {/if}
+                  <span class="small faint">
+                    {e.lastUsed ? when(e.lastUsed, $lang) : $t('proxy.hist.never')}{e.addr ? ' · ' + e.addr : ''}
+                    {#if e.sessions}· <button class="linkish" aria-expanded={openExit === e.peerId} on:click={() => (openExit = openExit === e.peerId ? '' : e.peerId)}>{$t('proxy.hist.sessions', { n: e.sessions })}</button>{/if}
+                  </span>
+                </div>
+                <div class="hist-stats small">
+                  <span title={$t('proxy.received')}><Icon name="download" size={12} /> {bytes(e.bytesRx, $lang)}</span>
+                  <span title={$t('proxy.sent')}><Icon name="upload" size={12} /> {bytes(e.bytesTx, $lang)}</span>
+                  {#if e.sessions}<span class="faint">{e.lastReadyMs ? $t('proxy.hist.ready', { s: (e.lastReadyMs / 1000).toFixed(1) }) : $t('proxy.hist.neverReady')}</span>{/if}
+                  {#if e.refused && !refusals(e).known}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.refused', { n: e.refused })}</span>{/if}
+                  {#if refusals(e).exit}<span class="warn-text" title={refusals(e).title}>{$t('proxy.hist.exitFails', { n: refusals(e).exit })}</span>{/if}
+                  {#if refusals(e).site}<span class="faint" title={refusals(e).title}>{$t('proxy.hist.siteFails', { n: refusals(e).site })}</span>{/if}
+                  <span class="faint">{priceText(e)}</span>
+                  {#if e.remainingAt && e.remaining >= 0}<span class="left" title={leftTitle(e)}>{leftText(e)}</span>{/if}
+                </div>
+                <div class="hist-actions">
+                  <IconButton icon={copiedLink === e.peerId ? 'check' : 'copy'} size="sm" label={$t('proxy.hist.copyLink')} on:click={() => copyLink(e)} />
+                  <IconButton icon="trash" size="sm" label={$t('proxy.hist.forget')} on:click={() => forget(e)} disabled={!!busy || e.active} />
+                  {#if !(vpn.running && vpn.relayPeerId === e.peerId)}
+                    <Button size="sm" on:click={() => connectTo(e)} disabled={!!busy}>{$t('proxy.hist.connect')}</Button>
+                  {/if}
+                </div>
+                {#if openExit === e.peerId}
+                  <div class="sessions small">
+                    {#each sessionsOf(e.peerId) as h (h.id || h.peerId + h.startedAt)}
+                      <div class="session">
+                        <span>{when(h.startedAt, $lang)} · {duration(sessionSeconds(h))}{h.endReason ? ' · ' + $t('proxy.hist.end.' + h.endReason) : h.active ? ' · ' + $t('proxy.hist.now') : ''}</span>
+                        <span class="faint"><Icon name="download" size={11} /> {bytes(h.bytesRx, $lang)} <Icon name="upload" size={11} /> {bytes(h.bytesTx, $lang)}{h.readyMs ? ' · ' + $t('proxy.hist.ready', { s: (h.readyMs / 1000).toFixed(1) }) : ''}{#if h.remainingAt && h.remaining >= 0}<span title={leftTitle(h)}> · {leftText(h)}</span>{/if}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {#if saved.length > 6}
+            <div><Button size="sm" variant="ghost" on:click={() => (showAllHistory = !showAllHistory)}>{showAllHistory ? $t('proxy.hist.showLess') : $t('proxy.hist.showAll', { n: saved.length })}</Button></div>
+          {/if}
+        {:else}
+          <p class="small faint">{$t('proxy.hist.empty')}</p>
+        {/if}
+      </section>
+    {:else}
+      <section class="card stack" class:sharing={sharing.enabled}>
+        <div class="card-head">
+          <span class="ico" class:ok={sharing.enabled}><Icon name="upload" size={16} /></span>
+          <div class="grow">
+            <h2>{$t('proxy.share.title')} {#if sharing.enabled}<span class="chip ok live-chip"><span class="pulse"></span> {$t('proxy.share.live')}</span>{/if}</h2>
+            <p class="small muted">{$t('proxy.share.hint')}</p>
+          </div>
+          <Button variant={sharing.enabled ? 'danger' : 'primary'} on:click={share} loading={busy === 'share'}>
+            {busy === 'share' ? $t('common.working') : sharing.enabled ? $t('proxy.share.stop') : $t('proxy.share.start')}
+          </Button>
+        </div>
+        {#if sharing.enabled}
+          <div class="stats">
+            <div class="stat"><span class="eyebrow">{$t('proxy.share.price')}</span><span class="num">{price(sharing.config.pricePerMb, $lang)}</span></div>
+            <div class="stat"><span class="eyebrow">{$t('proxy.share.sessions')}</span><span class="num">{sharing.accepted} <span class="faint small">{$t('proxy.share.refused', { n: sharing.refused })}</span></span></div>
+            <div class="stat"><span class="eyebrow">{$t('proxy.share.carried')}</span><span class="num">{bytes(sharing.bytes, $lang)}</span></div>
+            {#if sharing.paymentsReady}<div class="stat"><span class="eyebrow">{$t('proxy.share.earned')}</span><span class="num ok">${sharing.earnedUsdt}</span></div>{/if}
+          </div>
+          {#if accessMode === 'public'}
+            <p class="small faint">{$t('proxy.share.published', { when: sharing.lastPublish ? when(sharing.lastPublish, $lang) : $t('proxy.share.notYet') })}</p>
+          {:else}
+            <p class="small faint">{$t('access.sharedHidden')}</p>
+          {/if}
+          {#if sharing.lastError}<p class="small error">{sharing.lastError}</p>{/if}
+        {/if}
+        {#if (sharing.enabled && sharing.paymentsReady) || Number(vouchers.owedTon) > 0 || Number(vouchers.cashedTon) > 0}
+          <div class="sub">
+            <div class="eyebrow">{$t('proxy.share.deposits')}</div>
+            <div class="stats">
+              <div class="stat"><span class="eyebrow">{$t('proxy.share.owed')}</span><span class="num">{amount(vouchers.owedTon, $lang)} TON</span></div>
+              <div class="stat"><span class="eyebrow">{$t('proxy.share.collected')}</span><span class="num ok">{amount(vouchers.cashedTon, $lang)} TON</span></div>
+            </div>
+            <TestnetNotice compact />
+            {#if vouchers.claimProblem}
+              <div class="small notice danger" role="alert">
+                <Icon name="coin" size={14} />
+                <span>{$t('proxy.share.noGas', { owed: amount(vouchers.owedTon, $lang) })}
+                  {#if vouchers.walletAddr}<span class="block mono">{vouchers.walletAddr}
+                    <IconButton icon="copy" size="sm" label={$t('common.copy')} on:click={() => copy(vouchers.walletAddr)} /></span>{/if}
+                </span>
+              </div>
+            {/if}
+            <p class="small muted">{$t('proxy.share.depositNote')}</p>
+          </div>
+        {/if}
+        <ExitAccessCard access={sharing.access} enabled={sharing.enabled} on:change={refresh} />
+        {#if !sharing.enabled && !sharing.access}
+          <div class="row wrap fields">
+            <div class="grow"><Input label={$t('proxy.share.priceLabel')} bind:value={form.price} /></div>
+            <div class="grow"><Input type="number" label={$t('proxy.share.freeKb')} min="0" max="1024" bind:value={form.freeKb} /></div>
+            <div class="grow"><Input type="number" label={$t('proxy.share.upload')} min="0" bind:value={form.mbps} /></div>
+            <Button className="measure" on:click={measure} disabled={!!busy} loading={busy === 'measure'}>{busy === 'measure' ? $t('proxy.share.measuring') : $t('proxy.share.measure')}</Button>
+          </div>
+          <p class="note small">
+            {$t('proxy.share.legal')}
+            {$t('proxy.share.wallet')}
+          </p>
+        {/if}
+        <div class="sub">
+          <div class="eyebrow">{$t('proxy.share.freeFor')}</div>
+          <p class="small muted">{$t('proxy.share.freeHint')}</p>
+          <PeerList ids={sharing.config.freePeers || []} {contacts} disabled={busy === 'free'} label={$t('proxy.share.freeFor')}
+            empty={$t('proxy.share.freeEmpty')} on:change={(e) => setFreePeers(e.detail)} />
+        </div>
+      </section>
+
+      <AccessCard {contacts} />
+
+      <RelayCard {contacts} />
+    {/if}
   </div>
 </div>
 
@@ -719,106 +715,95 @@
 {/if}
 
 <style>
-  .row.wrap label { flex: 1; min-width: 160px; }
-  .measure { align-self: flex-end; }
-  .paywith { align-items: center; gap: 10px; }
-  .seg button:disabled { opacity: 0.4; }
+  .px { height: 100%; overflow-y: auto; padding: var(--sp-6) var(--sp-6) var(--sp-12); display: block; }
+  .pxwrap { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-3); }
+  .head { display: flex; align-items: flex-end; gap: var(--sp-3); flex-wrap: wrap; }
+  .banner { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-lg); }
+  .banner.warn { background: var(--warn-soft); color: var(--text); border: 1px solid var(--warn); }
+  .banner.warn :global(svg) { color: var(--warn-fg); }
+  .notice { display: flex; gap: 6px; align-items: flex-start; border-radius: var(--r-md); padding: 8px 10px; line-height: 1.4; }
+  .notice :global(svg) { flex: none; margin-top: 2px; }
+  .notice.warn { color: var(--warn-fg); background: var(--warn-soft); }
+  .notice.danger { color: var(--danger-fg); background: var(--danger-soft); }
   .block { display: block; margin-top: 2px; }
-  .sub { display: flex; flex-direction: column; gap: 8px; }
-  .opt { align-items: center; }
-  .icon.tiny { width: 24px; height: 24px; border-radius: 7px; }
+  .sub { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .fields { align-items: flex-end; }
+  .fields .grow { min-width: 150px; }
+  :global(.measure) { align-self: flex-end; }
+  .paywith { align-items: center; gap: var(--sp-3); }
 
-  .conn { position: relative; overflow: hidden; }
-  .conn::before {
-    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.6s var(--ease);
-    background: radial-gradient(500px 200px at 0% 0%, var(--ok-soft), transparent 70%);
+  /* the state card: a square mark that changes colour, the title, one main button */
+  .conn-top { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+  .state-ic {
+    width: 44px; height: 44px; border-radius: var(--r-lg); flex: none; display: grid; place-items: center;
+    background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
   }
-  .conn.ready::before { opacity: 1; }
-  .conn > * { position: relative; }
-  .conn-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .power {
-    width: 64px; height: 64px; border-radius: 50%; padding: 0; flex: none; display: grid; place-items: center;
-    background: var(--raised); color: var(--muted); border: 1px solid var(--line);
-  }
-  .power:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); transform: scale(1.05); }
-  .power.on { background: linear-gradient(135deg, var(--ok), color-mix(in srgb, var(--ok) 60%, var(--accent))); color: #fff; border-color: transparent; box-shadow: 0 0 0 6px var(--ok-soft), 0 8px 24px var(--ok-soft); }
-  .conn.running.problem .power.on { background: var(--danger); box-shadow: 0 0 0 6px var(--danger-soft); animation: none; }
-  .running:not(.ready) .power.on { animation: breathe 1.6s ease-in-out infinite; }
-  .power.on:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
-  @keyframes breathe { 0%, 100% { box-shadow: 0 0 0 4px var(--ok-soft); } 50% { box-shadow: 0 0 0 12px transparent; } }
-  .big-spin { width: 22px; height: 22px; }
+  .conn.running .state-ic { background: var(--warn-soft); color: var(--warn-fg); border-color: transparent; }
+  .conn.ready .state-ic { background: var(--ok-soft); color: var(--ok-fg); }
+  .conn.running.problem .state-ic { background: var(--danger-soft); color: var(--danger-fg); }
+  .conn .grow h2 { font-size: var(--fs-lg); line-height: var(--lh-lg); }
+  .opts { display: flex; flex-direction: column; gap: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+  .last-exit { gap: var(--sp-3); flex-wrap: wrap; }
 
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-  .stat { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--raised); min-width: 0; }
-  .num { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; font-size: 15px; font-variant-numeric: tabular-nums; }
-  .num.ok { color: var(--ok); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-2); }
+  .stat { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--surface-2); min-width: 0; }
+  .num { display: inline-flex; align-items: center; gap: 6px; font-weight: var(--fw-semibold); font-size: var(--fs-md); font-variant-numeric: tabular-nums; }
+  .num.ok { color: var(--ok-fg); }
 
-  .auto { display: flex; flex-direction: column; gap: 10px; }
-  .exits { display: flex; flex-direction: column; gap: 6px; }
+  .auto { display: flex; flex-direction: column; gap: var(--sp-3); }
+  .exits { display: flex; flex-direction: column; gap: var(--sp-1); }
   .exit {
-    display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 14px; flex-wrap: wrap;
-    background: var(--raised); border: 1.5px solid transparent; cursor: pointer;
-    transition: border-color var(--dur), background var(--dur), transform 0.3s var(--spring);
-    animation: fade-up 0.3s var(--ease) both;
+    display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); border-radius: var(--r-md); flex-wrap: wrap;
+    background: var(--surface-2); border: 1px solid transparent; cursor: pointer;
+    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
   }
-  .exit:hover { border-color: var(--line); transform: translateX(2px); }
-  .exit:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+  .exit:hover { border-color: var(--border-strong); }
+  .exit:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
   .exit.sel { border-color: var(--accent); background: var(--accent-soft); }
   .pick-preview { cursor: default; }
-  .pick-preview:hover { transform: none; border-color: transparent; }
-  .ex-ic { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-  .radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--faint); flex: none; transition: border 0.3s var(--spring); }
-  .exit.sel .radio { border: 5.5px solid var(--accent); }
-  .id { font-size: 12.5px; min-width: 90px; word-break: normal; }
-  .chip.ping.good { color: var(--ok); background: var(--ok-soft); }
-  .chip.ping.mid { color: var(--warn); background: var(--warn-soft); }
-  .leak-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; margin-top: 2px; }
-  .leak-warn :global(svg) { flex: none; margin-top: 2px; }
-  .paid-ahead { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--warn-soft); line-height: 1.45; }
-  .paid-ahead b { gap: 6px; color: var(--warn); }
-  .paid-ahead input[type='checkbox'] { width: auto; margin: 0; }
+  .pick-preview:hover { border-color: transparent; }
+  .ex-ic { width: 28px; height: 28px; border-radius: var(--r-md); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-fg); }
+  .radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-strong); flex: none; box-sizing: border-box; }
+  .exit.sel .radio { border: 5px solid var(--accent); }
+  .id { font-size: var(--fs-sm); min-width: 90px; word-break: normal; }
+  .chip.ping.good { color: var(--ok-fg); background: var(--ok-soft); }
+  .chip.ping.mid { color: var(--warn-fg); background: var(--warn-soft); }
+  .chip.ping.bad { color: var(--danger-fg); background: var(--danger-soft); }
+  .paid-ahead { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-3); border-radius: var(--r-md); background: var(--warn-soft); line-height: 1.45; }
+  .paid-ahead b { gap: 6px; color: var(--warn-fg); }
   .tip { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; text-decoration: underline dotted; cursor: help; }
-  .src { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; cursor: help; }
-  .src.on { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .src { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-xs); cursor: help; }
+  .src.on { color: var(--accent-fg); background: var(--accent-soft); border-color: transparent; }
   .diff summary { cursor: pointer; }
   .diff p { margin: 6px 0 0; line-height: 1.45; }
-  .exit-warn { display: flex; gap: 6px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 8px 10px; line-height: 1.4; }
-  .exit-warn :global(svg) { flex: none; margin-top: 2px; }
-  .exit-warn .mono { word-break: break-all; }
-  .chip.ping.bad { color: var(--danger); background: var(--danger-soft); }
-  .sortrow { gap: 4px; }
-  .last-exit { gap: 10px; flex-wrap: wrap; }
-  .hist { display: flex; flex-direction: column; gap: 6px; }
-  .hist-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; }
+  .sortrow { gap: var(--sp-1); }
+  .chip-btn { height: 24px; padding: 0 10px; font-size: var(--fs-xs); border-radius: var(--r-pill); background: transparent; border-color: var(--border); color: var(--muted); }
+  .chip-btn.on, .chip-btn.on:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-fg); border-color: transparent; }
+
+  .hist { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .hist-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); }
   .hist-row.active { border-color: var(--ok); background: var(--ok-soft); }
+  .hist-row.fav:not(.active) { border-color: var(--accent-soft); }
   .hist-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .hist-main .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist-main .row { flex-wrap: wrap; gap: 4px 6px; }
+  .hist-main b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; font-weight: var(--fw-semibold); }
   .hist-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
   .hist-stats span { display: inline-flex; align-items: center; gap: 4px; }
-  .hist-actions { display: flex; gap: 6px; align-items: center; }
-  .hist-stats .left { color: var(--text); font-weight: 500; }
-  .hist-stats .warn-text { color: var(--warn); }
-  .ok-chip { color: var(--ok); }
-  .hist-row.fav:not(.active) { border-color: var(--accent-soft); }
-  .hist-main .row { flex-wrap: wrap; gap: 4px 6px; }
-  .hist-main b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .hist-stats .left { color: var(--text); font-weight: var(--fw-medium); }
+  .hist-stats .warn-text { color: var(--warn-fg); }
+  .hist-actions { display: flex; gap: var(--sp-1); align-items: center; }
   .loc { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
-  .star { color: var(--muted); }
-  .star.on { color: #f5b301; }
-  .name-input { padding: 4px 8px; font-size: 13px; min-width: 0; width: 100%; max-width: 260px; }
-  .linkish { padding: 0; border: none; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+  .name-input { padding: 3px 8px; font-size: var(--fs-sm); min-width: 0; width: 100%; max-width: 260px; height: var(--ctl-sm); }
+  .linkish { padding: 0; height: auto; border: none; background: none; color: var(--accent-fg); font: inherit; cursor: pointer; }
   .linkish:hover:not(:disabled) { background: none; border: none; text-decoration: underline; }
-  .sessions { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--line-soft); }
-  .session { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .sessions { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--border); }
+  .session { display: flex; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
   .session span { display: inline-flex; align-items: center; gap: 4px; }
   @media (max-width: 720px) { .hist-row { grid-template-columns: 1fr; } }
-  .chip-btn { padding: 4px 12px; font-size: 12px; border-radius: 999px; background: transparent; border-color: var(--line-soft); color: var(--muted); }
-  .chip-btn.on, .chip-btn.on:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
-  .live-chip { margin-left: 6px; vertical-align: middle; font-size: 11px; }
+  .live-chip { margin-left: 6px; vertical-align: middle; font-size: var(--fs-2xs); }
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-  .killed { gap: 10px; align-items: center; border-color: #c98a00; background: color-mix(in srgb, #c98a00 12%, var(--surface)); }
-  .killbtn { background: #c98a00; color: #fff; border-color: #c98a00; font-weight: 600; padding: 8px 14px; flex: none; }
-  .killbtn:hover:not(:disabled) { filter: brightness(1.08); }
 </style>
