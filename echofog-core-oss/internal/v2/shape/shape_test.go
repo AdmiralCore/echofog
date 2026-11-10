@@ -14,7 +14,7 @@ func rng(min, max uint32) *objectspb.Range { return &objectspb.Range{Min: min, M
 func TestBuiltinProfilesMatchWireTable(t *testing.T) {
 	udp := &Profile{
 		ID:        IDDefaultUDP,
-		InitLen:   &Range{900, 1200},
+		InitLen:   &Range{700, 1000},
 		Pad:       &Range{0, 48},
 		Junk:      &Junk{Count: Range{0, 2}, Len: Range{32, 256}, Gap: Range{5, 30}},
 		Keepalive: Range{12, 24},
@@ -150,7 +150,7 @@ func TestParseRejectsBuiltinWithData(t *testing.T) {
 		name string
 		in   *objectspb.ShapeProfile
 	}{
-		{"init_len", &objectspb.ShapeProfile{Id: IDDefaultUDP, InitLen: rng(900, 1200)}},
+		{"init_len", &objectspb.ShapeProfile{Id: IDDefaultUDP, InitLen: rng(700, 1000)}},
 		{"pad", &objectspb.ShapeProfile{Id: IDDefaultUDP, Pad: rng(0, 1)}},
 		{"buckets", &objectspb.ShapeProfile{Id: IDDefaultUDP, Buckets: []uint32{512}}},
 		{"pad_budget", &objectspb.ShapeProfile{Id: IDDefaultUDP, PadBudget: rng(1, 2)}},
@@ -187,7 +187,7 @@ func TestParseValidation(t *testing.T) {
 		name string
 		in   *objectspb.ShapeProfile
 	}{
-		{"init_len below the 900 floor", &objectspb.ShapeProfile{InitLen: rng(899, 1000)}},
+		{"init_len below the 600 floor", &objectspb.ShapeProfile{InitLen: rng(599, 1000)}},
 		{"init_len above the 1200 first-datagram limit", &objectspb.ShapeProfile{InitLen: rng(1000, 1201)}},
 		{"init_len min above max", &objectspb.ShapeProfile{InitLen: rng(1100, 1000)}},
 		{"pad above the record limit", &objectspb.ShapeProfile{Pad: rng(0, 16385)}},
@@ -231,7 +231,7 @@ func TestParseValidation(t *testing.T) {
 		t.Fatalf("Validate = %v, want ErrInvalidProfile", err)
 	}
 	valid := &Profile{
-		InitLen:   &Range{900, 1200},
+		InitLen:   &Range{700, 1000},
 		Pad:       &Range{0, 16384},
 		Buckets:   []uint32{1, 16384},
 		PadBudget: &Range{0, 1 << 20},

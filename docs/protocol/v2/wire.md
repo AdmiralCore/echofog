@@ -191,7 +191,7 @@ InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner
   once per flow, the *flight size* `F − 71`, with QUIC PADDING frames up to that size (the padding is inside
   the inner AEAD, so it is not visible on the wire), and the inner stack of the **responder** accepts
   Initial datagrams of any size from `MinInner` (= 200 bytes) up, and does not pad its own Initial packets.
-  `F` is drawn per flow, uniform over the profile's `init_len` (§9; default [900, 1200]) and clamped to the
+  `F` is drawn per flow, uniform over the profile's `init_len` (§9; default [700, 1000]) and clamped to the
   datagram ceiling. After the inner handshake completes the inner datagram size is the ordinary one.
 - The total length is `max(drawn, 71 + inner_len)`, where `drawn` comes from the profile in the same
   way. **Before the first authenticated responder packet no datagram of a flow is longer than 1200
@@ -205,9 +205,9 @@ InitPlain = ts(u32, unix seconds) ‖ flags(u8 = 0) ‖ inner_len(u16) ‖ inner
 - Overhead: 71 bytes plus padding.
 
 **Path requirement (`ErrPathTooSmall`).** No Init is longer than 1200 bytes, so noise3 passes the universal
-floor of **1232 bytes** of UDP payload (an IPv6 path of MTU 1280) like the other carriers. The lower bound
-of `init_len` is 900 bytes: a sender whose datagram ceiling is below 900 bytes fails with `ErrPathTooSmall`
-for noise3; a ceiling between 900 and 1200 narrows the range of `F` to the ceiling. If the initiator learns
+floor of **1232 bytes** of UDP payload (an IPv6 path of MTU 1280) like the other carriers. A profile's
+`init_len` lies within [600, 1200]. A sender whose datagram ceiling is below 900 bytes fails with
+`ErrPathTooSmall` for noise3; a ceiling below `init_len` narrows the range of `F` to the ceiling. If the initiator learns
 that the path cannot carry its Inits (an ICMP Packet Too Big message, a known path MTU below the datagram it
 drew, or no answer to an Init after its retries), it marks noise3 unusable on that path and **falls back to
 the TCP carriers** (`reality2-tcp` or `ws2`, §1) without waiting for a full handshake timeout.
@@ -309,7 +309,7 @@ Before the first Init, the initiator MAY send junk datagrams and decoys as its s
 (§9): random-byte datagrams, or datagrams shaped like a DNS query or a QUIC Initial of another
 connection. The responder drops them at step 2 of §2.5. They exist only to change the first-packet
 shape seen by classifiers; they carry nothing. The first Init itself remains a fully random datagram
-of 900 to 1200 bytes (§2.4); a profile that makes the Init itself look like a QUIC long-header packet is
+of 600 to 1200 bytes (§2.4); a profile that makes the Init itself look like a QUIC long-header packet is
 future work ([security.md](security.md) §4).
 
 ## 3. reality2-quic
@@ -827,7 +827,7 @@ Built-in profiles:
 
 | Field | `default-udp` (1) | `default-tls` (2) |
 |---|---|---|
-| `init_len` | [900, 1200] | — |
+| `init_len` | [700, 1000] | — |
 | `pad` | [0, 48] per packet, never beyond the path MTU | [0, 256] per record within the budget |
 | `buckets` | — | 512, 1024, 1460, 2920, 4096 |
 | `pad_budget` | — | [4096, 16384], drawn per stream direction |

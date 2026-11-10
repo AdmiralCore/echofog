@@ -218,7 +218,7 @@ func l0MaxDatagram(v int) int {
 // flightSize draws the Init total of one flow, uniform over the profile's init_len and clamped to
 // the ceiling and to 1200 bytes (wire.md §2.4).
 func flightSize(profile *shape.Profile, maxDatagram int, rnd *mrand.Rand) int {
-	lo, hi := packet.MinCeiling, packet.MaxFirstLen
+	lo, hi := 700, 1000
 	if profile != nil && profile.InitLen != nil {
 		lo, hi = int(profile.InitLen.Min), int(profile.InitLen.Max)
 	}
