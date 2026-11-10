@@ -114,6 +114,8 @@ func FuzzOpenInit(f *testing.F) {
 	v := loadVectors(f)
 	f.Add(hx(f, v.Init.Datagram))
 	f.Add(make([]byte, MinInitLen))
+	f.Add(make([]byte, MaxFirstLen))
+	f.Add(hx(f, v.Init.Datagram)[:600])
 	f.Fuzz(func(t *testing.T, datagram []byte) {
 		var keys Keys
 		_, _ = OpenInit(keys, datagram)

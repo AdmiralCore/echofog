@@ -173,6 +173,16 @@ type Config struct {
 	// If set too high, the path might not support packets of that size, leading to a timeout of the QUIC handshake.
 	// Values below 1200 are invalid.
 	InitialPacketSize uint16
+	// AllowSmallInitial lets Initial datagrams be smaller than the 1200 bytes of RFC 9000 §14.1.
+	// A server with it set accepts them and does not pad its own Initial packets; the
+	// anti-amplification limit still applies to what it received. It exists for noise3, whose
+	// first datagrams must stay below 1200 bytes (EchoFog wire.md §2.4); both ends are EchoFog.
+	AllowSmallInitial bool
+	// InitialFlightSize, when not zero, is the size of every datagram a client sends until its
+	// handshake completes: the packer fills Initial datagrams with PADDING up to it. After the
+	// handshake the size is InitialPacketSize again. Valid values are 200 up to InitialPacketSize.
+	// Used together with AllowSmallInitial.
+	InitialFlightSize uint16
 	// MaxUDPPayloadSize is the value advertised in the max_udp_payload_size
 	// transport parameter, and the ceiling path MTU discovery may grow the sent
 	// packets to. If not set, it defaults to quic-go's historical 1452 (the

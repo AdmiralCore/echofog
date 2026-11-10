@@ -10,17 +10,17 @@
 //
 // Choices made where the specification leaves room:
 //
-//   - Inner QUIC Initial size. carrier/quicx.Noise3QUICConfig sizes Initial packets by the data
-//     overhead (22 bytes), but an Init datagram has 71 bytes of overhead. This package overrides
-//     InitialPacketSize to exactly 1200 bytes (wire.md §2.4: the inner stack sends Initial
-//     datagrams of exactly 1200 bytes) and keeps MaxUDPPayloadSize from the quicx config for the
-//     data direction. Without the override a 1382-byte inner datagram would need a 1453-byte Init.
-//   - Outer datagram ceiling. The default is 1452 bytes (an IPv4 1500-byte path). A caller may
-//     pass a smaller MaxDatagramLen for another path. wire.md §2.4 calls 1232 bytes the payload
-//     floor any path must carry, but 71+1200 = 1271 > 1232: a minimum-MTU IPv6 path cannot carry
-//     an Init with the required 1200-byte inner datagram. This package rejects a ceiling below
-//     1271 with ErrBadConfig instead of emitting an oversized or split Init; the floor versus the
-//     1200-byte inner Initial is an open contradiction for the specification.
+//   - Inner QUIC Initial size (N3-FIX). No datagram of a flow before the responder's first answer
+//     is longer than 1200 bytes (wire.md §2.4). The dialer draws the Init total F of a flow from
+//     the profile's init_len and has the inner QUIC client send its whole handshake flight at
+//     F-71 bytes (fork option InitialFlightSize, patch 4b in third_party/quic-go); both ends allow
+//     Initial datagrams below 1200 (AllowSmallInitial). The inner ClientHello (X25519MLKEM768)
+//     spans two or more such datagrams, each its own Init.
+//   - Outer datagram ceiling. The default is 1172 bytes (the UDP payload of an IPv4 path of MTU
+//     1200); a caller may pass another MaxDatagramLen between 900 and 1452. Below 900 the dialer
+//     and listener fail with ErrBadConfig (the spec's ErrPathTooSmall). The inner QUIC stack
+//     advertises max_udp_payload_size of the ceiling minus the data overhead and the largest
+//     padding and does not discover the path MTU.
 //   - Key sets. The dialer keeps the newest four Init key sets; the responder keeps the first
 //     Init's keys (it always answers with them, §2.5 step 6) plus the three newest sibling sets.
 //     A response is attributed to a set by trying the sets newest first.

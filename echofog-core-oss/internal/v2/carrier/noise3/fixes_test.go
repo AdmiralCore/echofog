@@ -234,7 +234,7 @@ func TestRestartRedrawsSilenceInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.restartAfter = time.Second
-	if _, err := c.write(make([]byte, 1200)); err != nil {
+	if _, err := c.write(make([]byte, 700)); err != nil {
 		t.Fatal(err)
 	}
 	c.mu.Lock()
@@ -244,7 +244,7 @@ func TestRestartRedrawsSilenceInterval(t *testing.T) {
 	c.lastSend = clock.Now().Add(time.Millisecond)
 	c.mu.Unlock()
 	clock.Advance(2 * time.Second)
-	if _, err := c.write(make([]byte, 1200)); err != nil {
+	if _, err := c.write(make([]byte, 700)); err != nil {
 		t.Fatal(err)
 	}
 	c.mu.Lock()
@@ -397,7 +397,7 @@ func TestWriteDoesNotBlockHandleWhileDialing(t *testing.T) {
 
 	writeDone := make(chan struct{})
 	go func() {
-		_, _ = c.write(make([]byte, 1200))
+		_, _ = c.write(make([]byte, 700))
 		close(writeDone)
 	}()
 	select {
@@ -428,7 +428,7 @@ func TestWriteDoesNotBlockHandleWhileDialing(t *testing.T) {
 }
 
 // Н-7: the outer ceiling is configurable and is never exceeded; a ceiling below the minimum Init
-// is rejected at construction.
+// (900 bytes, wire.md §2.4) is rejected at construction.
 func TestMaxDatagramLen(t *testing.T) {
 	var maskSK [32]byte
 	if _, err := rand.Read(maskSK[:]); err != nil {
@@ -439,28 +439,28 @@ func TestMaxDatagramLen(t *testing.T) {
 		t.Fatal(err)
 	}
 	mk, _ := newMaskKey(t, time.Now())
-	if _, err := Listen("127.0.0.1:0", ListenerConfig{Keys: []MaskKey{mk}, Profile: mustProfile(t), MaxDatagramLen: 1270}); !errors.Is(err, ErrBadConfig) {
-		t.Fatalf("Listen with a 1270-byte ceiling = %v, want ErrBadConfig", err)
+	if _, err := Listen("127.0.0.1:0", ListenerConfig{Keys: []MaskKey{mk}, Profile: mustProfile(t), MaxDatagramLen: 899}); !errors.Is(err, ErrBadConfig) {
+		t.Fatalf("Listen with a 899-byte ceiling = %v, want ErrBadConfig", err)
 	}
 	pc := newFakePC()
-	c := newDialConn(DialerConfig{MaxDatagramLen: 1270}, &fakeClock{t: time.Unix(70_000, 0)},
+	c := newDialConn(DialerConfig{MaxDatagramLen: 1000}, &fakeClock{t: time.Unix(70_000, 0)},
 		noPreludeProfile(t), maskPub,
 		func(context.Context) (net.PacketConn, net.Addr, error) { return pc, flowAddr{id: 3}, nil }, flowAddr{id: 3})
 	c.conn = pc
-	if _, err := c.write(make([]byte, 1200)); err == nil {
-		t.Fatal("a 1200-byte inner datagram was sent under a 1270-byte outer ceiling")
+	if _, err := c.write(make([]byte, 1000)); err == nil {
+		t.Fatal("a 1000-byte inner datagram was sent under a 1000-byte outer ceiling")
 	}
 	pc2 := newFakePC()
-	c2 := newDialConn(DialerConfig{MaxDatagramLen: 1300}, &fakeClock{t: time.Unix(70_000, 0)},
+	c2 := newDialConn(DialerConfig{MaxDatagramLen: 1000}, &fakeClock{t: time.Unix(70_000, 0)},
 		noPreludeProfile(t), maskPub,
 		func(context.Context) (net.PacketConn, net.Addr, error) { return pc2, flowAddr{id: 3}, nil }, flowAddr{id: 3})
 	c2.conn = pc2
-	if _, err := c2.write(make([]byte, 1200)); err != nil {
+	if _, err := c2.write(make([]byte, 700)); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range pc2.snapshot() {
-		if len(d) > 1300 {
-			t.Fatalf("Init is %d bytes, above the 1300-byte ceiling", len(d))
+		if len(d) > 1000 {
+			t.Fatalf("Init is %d bytes, above the 1000-byte ceiling", len(d))
 		}
 	}
 }

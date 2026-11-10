@@ -246,7 +246,7 @@ func TestPreludeBeforeFirstInit(t *testing.T) {
 			return pc, flowAddr{id: 3}, nil
 		}, flowAddr{id: 3})
 	c.conn = pc
-	if _, err := c.write(make([]byte, 1200)); err != nil {
+	if _, err := c.write(make([]byte, 700)); err != nil {
 		t.Fatal(err)
 	}
 	writes := pc.snapshot()

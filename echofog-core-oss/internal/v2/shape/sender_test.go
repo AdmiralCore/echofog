@@ -20,16 +20,16 @@ func mustProfile(t *testing.T, p *Profile) *Profile {
 }
 
 func TestNextInitLen(t *testing.T) {
-	s := NewSender(mustProfile(t, &Profile{InitLen: &Range{1280, 1420}, Keepalive: Range{12, 24}}), newRand(1), false)
+	s := NewSender(mustProfile(t, &Profile{InitLen: &Range{1000, 1150}, Keepalive: Range{12, 24}}), newRand(1), false)
 	for i := 0; i < 1000; i++ {
 		n := s.NextInitLen()
-		if n < 1280 || n > 1420 {
-			t.Fatalf("NextInitLen() = %d, want [1280, 1420]", n)
+		if n < 1000 || n > 1150 {
+			t.Fatalf("NextInitLen() = %d, want [1000, 1150]", n)
 		}
 	}
-	fixed := NewSender(mustProfile(t, &Profile{InitLen: &Range{1300, 1300}, Keepalive: Range{12, 24}}), newRand(2), false)
-	if n := fixed.NextInitLen(); n != 1300 {
-		t.Fatalf("NextInitLen() = %d, want 1300", n)
+	fixed := NewSender(mustProfile(t, &Profile{InitLen: &Range{1000, 1000}, Keepalive: Range{12, 24}}), newRand(2), false)
+	if n := fixed.NextInitLen(); n != 1000 {
+		t.Fatalf("NextInitLen() = %d, want 1000", n)
 	}
 	none := NewSender(nil, newRand(3), false)
 	if n := none.NextInitLen(); n != 0 {
@@ -343,9 +343,9 @@ func TestIdlePad(t *testing.T) {
 
 func TestNilRand(t *testing.T) {
 	// A nil source uses the package-level generator; values must still respect the profile.
-	s := NewSender(mustProfile(t, &Profile{InitLen: &Range{1300, 1300}, Keepalive: Range{30, 30}}), nil, false)
-	if n := s.NextInitLen(); n != 1300 {
-		t.Fatalf("NextInitLen() = %d, want 1300", n)
+	s := NewSender(mustProfile(t, &Profile{InitLen: &Range{1000, 1000}, Keepalive: Range{30, 30}}), nil, false)
+	if n := s.NextInitLen(); n != 1000 {
+		t.Fatalf("NextInitLen() = %d, want 1000", n)
 	}
 	if pad := s.PadFor(10); pad != 0 {
 		t.Fatalf("PadFor(10) = %d, want 0", pad)
@@ -364,7 +364,7 @@ func TestNilRand(t *testing.T) {
 
 func TestDeterministic(t *testing.T) {
 	p := mustProfile(t, &Profile{
-		InitLen:   &Range{1280, 1420},
+		InitLen:   &Range{1000, 1150},
 		Pad:       &Range{0, 48},
 		Junk:      &Junk{Count: Range{0, 2}, Len: Range{32, 64}, Gap: Range{1, 5}},
 		Keepalive: Range{12, 24},

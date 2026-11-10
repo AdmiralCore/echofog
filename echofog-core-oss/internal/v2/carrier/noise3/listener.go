@@ -47,9 +47,8 @@ type ListenerConfig struct {
 	// LowPower disables idle padding (platforms.md §2).
 	LowPower bool
 	// MaxDatagramLen is the outer noise3 payload ceiling (path MTU minus IP and UDP headers).
-	// Zero means packet.MaxDatagramLen (1452, an IPv4 1500-byte path); values above it are
-	// clamped to it. It must be at least 71+1200, otherwise an Init cannot carry the inner QUIC
-	// Initial (see doc.go).
+	// Zero means packet.DefaultDatagramLen (1172, an IPv4 path of MTU 1200); values above 1452 are
+	// clamped to it. It must be at least 900 (the lower bound of init_len, see doc.go).
 	MaxDatagramLen int
 	// MaxPending, MaxPendingPerIP and MaxFlows override the §10 pending-flow limits (4096, 64)
 	// and the local total-flow bound (4096). Tests use smaller values; zero means the default.
@@ -130,7 +129,7 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 		tlsConf = server
 	}
 	quicConf := cfg.QUICConfig
-	quicConf, err := innerQUICConfig(quicConf, maxPadding(profile), l0MaxDatagram(cfg.MaxDatagramLen))
+	quicConf, err := innerQUICConfig(quicConf, maxPadding(profile), l0MaxDatagram(cfg.MaxDatagramLen), 0)
 	if err != nil {
 		return nil, err
 	}

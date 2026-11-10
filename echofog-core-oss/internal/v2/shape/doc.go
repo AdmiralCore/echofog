@@ -12,8 +12,8 @@
 // The specification fixes some bounds directly, and the rest follow from the limits of §10 and the
 // datagram layout of §2.4:
 //
-//   - init_len lies within [1271, 1452]: 71 bytes of noise3 overhead plus the 1200-byte inner QUIC
-//     Initial (§2.4) up to the largest UDP payload on a 1500-byte IPv4 path (§2.4, §10).
+//   - init_len lies within [600, 1200]: no datagram of a noise3 flow is longer than 1200 bytes
+//     before the responder has answered, and the inner QUIC flight needs at least 600 (§2.4).
 //   - pad is at most 16384: a TLS record carries at most 2^14 plaintext bytes, and §10 caps mux
 //     stream data per frame at 16384.
 //   - buckets are strictly ascending, at most 32 entries, each in [1, 16384]; a bucket is a TLS

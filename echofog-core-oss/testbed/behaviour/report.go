@@ -185,7 +185,7 @@ func (r *Report) runNet(ctx context.Context, o Options) {
 		name := fmt.Sprintf("mtu %d", mtu)
 		cell(name, NetemConfig{Seed: 93, MTU: mtu - 28}, 32<<10, nil)
 		if t := r.Net[name]; mtu < 1500 && !t.Connected {
-			r.Findings = append(r.Findings, fmt.Sprintf("%s: noise3 cannot connect: the first flight is a 1271-byte datagram (71 bytes of Init and the 1200-byte inner Initial), which a path of %d bytes with IP and UDP headers does not carry (noise3/doc.go, an open contradiction with the 1232-byte floor)", name, mtu))
+			r.Findings = append(r.Findings, fmt.Sprintf("%s: noise3 cannot connect: a datagram of the first flight did not fit a path of %d bytes with IP and UDP headers (wire.md §2.4: at most 1200 bytes, ceiling 1172)", name, mtu))
 		}
 	}
 }

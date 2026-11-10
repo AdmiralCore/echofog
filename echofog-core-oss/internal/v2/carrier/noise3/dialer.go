@@ -12,6 +12,7 @@ import (
 	quic "github.com/apernet/quic-go"
 
 	"github.com/echofog/echofog-core/internal/v2/carrier"
+	"github.com/echofog/echofog-core/internal/v2/carrier/noise3/packet"
 	"github.com/echofog/echofog-core/internal/v2/carrier/quicx"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/objects"
@@ -31,9 +32,8 @@ type DialerConfig struct {
 	// LowPower disables idle padding (platforms.md §2).
 	LowPower bool
 	// MaxDatagramLen is the outer noise3 payload ceiling (path MTU minus IP and UDP headers).
-	// Zero means packet.MaxDatagramLen (1452, an IPv4 1500-byte path); values above it are
-	// clamped to it. It must be at least 71+1200, otherwise an Init cannot carry the inner QUIC
-	// Initial (see doc.go).
+	// Zero means packet.DefaultDatagramLen (1172, an IPv4 path of MTU 1200); values above 1452 are
+	// clamped to it. It must be at least 900 (the lower bound of init_len, see doc.go).
 	MaxDatagramLen int
 }
 
@@ -87,7 +87,9 @@ func (d *Dialer) Dial(ctx context.Context, req carrier.DialRequest) (mux.Carrier
 		tlsConf = client
 	}
 	quicConf := d.cfg.QUICConfig
-	quicConf, err = innerQUICConfig(quicConf, maxPadding(profile), l0MaxDatagram(d.cfg.MaxDatagramLen))
+	ceiling := l0MaxDatagram(d.cfg.MaxDatagramLen)
+	flight := flightSize(profile, ceiling, nil)
+	quicConf, err = innerQUICConfig(quicConf, maxPadding(profile), ceiling, flight-packet.InitOverhead)
 	if err != nil {
 		return nil, err
 	}

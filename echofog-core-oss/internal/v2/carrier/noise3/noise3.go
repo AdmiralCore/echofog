@@ -162,18 +162,19 @@ func maxPadding(profile *shape.Profile) int {
 	return n
 }
 
-// innerQUICConfig returns the inner QUIC configuration with the Initial packet size of wire.md
-// §2.4: every inner QUIC Initial is exactly 1200 bytes, so 71+1200 fits any path the carrier is
-// willing to use. maxDatagram is the outer noise3 ceiling; the inner QUIC stack must never emit a
-// datagram that does not fit behind the data overhead. A ceiling below 1271 cannot carry an Init
-// at all and is rejected.
-func innerQUICConfig(base *quic.Config, pad, maxDatagram int) (*quic.Config, error) {
+// innerQUICConfig returns the inner QUIC configuration of wire.md §2.4: Initial datagrams may be
+// smaller than 1200 bytes (the fork's AllowSmallInitial), and a client sends its whole handshake
+// flight at the drawn flight size (flight, the inner size: the Init total minus 71; zero for a
+// listener). maxDatagram is the outer noise3 ceiling; the inner QUIC stack must never emit a
+// datagram that does not fit behind the data overhead and the largest padding. A ceiling below
+// packet.MinCeiling cannot carry an Init and is rejected.
+func innerQUICConfig(base *quic.Config, pad, maxDatagram, flight int) (*quic.Config, error) {
 	if maxDatagram <= 0 {
-		maxDatagram = packet.MaxDatagramLen
+		maxDatagram = packet.DefaultDatagramLen
 	}
-	if maxDatagram < packet.MinInitLen {
-		return nil, fmt.Errorf("%w: %d-byte datagrams cannot carry a %d-byte Init",
-			ErrBadConfig, maxDatagram, packet.MinInitLen)
+	if maxDatagram < packet.MinCeiling {
+		return nil, fmt.Errorf("%w: %d-byte datagrams are below the %d-byte floor of an Init",
+			ErrBadConfig, maxDatagram, packet.MinCeiling)
 	}
 	if base == nil {
 		var err error
@@ -183,22 +184,50 @@ func innerQUICConfig(base *quic.Config, pad, maxDatagram int) (*quic.Config, err
 		}
 	}
 	out := *base
-	out.InitialPacketSize = packet.MinInner
-	if inner := maxDatagram - packet.DataOverhead; int(out.MaxUDPPayloadSize) == 0 || int(out.MaxUDPPayloadSize) > inner {
+	inner := maxDatagram - packet.DataOverhead - pad
+	if inner < 800 {
+		return nil, fmt.Errorf("%w: a %d-byte ceiling with %d bytes of padding leaves %d-byte inner datagrams",
+			ErrBadConfig, maxDatagram, pad, inner)
+	}
+	out.AllowSmallInitial = true
+	out.InitialPacketSize = uint16(min(1200, inner))
+	if int(out.MaxUDPPayloadSize) == 0 || int(out.MaxUDPPayloadSize) > inner {
 		out.MaxUDPPayloadSize = uint16(inner)
 	}
-	if out.MaxDatagramFrameSize == 0 || out.MaxDatagramFrameSize > int64(maxDatagram-packet.DataOverhead) {
-		out.MaxDatagramFrameSize = int64(maxDatagram - packet.DataOverhead)
+	if flight > 0 {
+		out.InitialFlightSize = uint16(flight)
+	}
+	if out.MaxDatagramFrameSize == 0 || out.MaxDatagramFrameSize > int64(inner) {
+		out.MaxDatagramFrameSize = int64(inner)
 	}
 	return &out, nil
 }
 
-// l0MaxDatagram returns the configured outer ceiling or the IPv4 default.
+// l0MaxDatagram returns the configured outer ceiling or the default (the UDP payload of an IPv4
+// path of MTU 1200, wire.md §2.4).
 func l0MaxDatagram(v int) int {
-	if v <= 0 || v > packet.MaxDatagramLen {
+	if v <= 0 {
+		return packet.DefaultDatagramLen
+	}
+	if v > packet.MaxDatagramLen {
 		return packet.MaxDatagramLen
 	}
 	return v
+}
+
+// flightSize draws the Init total of one flow, uniform over the profile's init_len and clamped to
+// the ceiling and to 1200 bytes (wire.md §2.4).
+func flightSize(profile *shape.Profile, maxDatagram int, rnd *mrand.Rand) int {
+	lo, hi := 700, 1000
+	if profile != nil && profile.InitLen != nil {
+		lo, hi = int(profile.InitLen.Min), int(profile.InitLen.Max)
+	}
+	hi = min(hi, maxDatagram, packet.MaxFirstLen)
+	lo = min(lo, hi)
+	if hi <= lo {
+		return hi
+	}
+	return lo + randIntN(rnd, hi-lo+1)
 }
 
 // RegisterDialer registers d under the noise3 suite number.

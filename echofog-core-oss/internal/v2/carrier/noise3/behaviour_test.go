@@ -117,7 +117,7 @@ func TestClientSendsFreshInits(t *testing.T) {
 	})
 	c.conn = pc
 
-	inner := make([]byte, 1200)
+	inner := make([]byte, 700)
 	for i := range inner {
 		inner[i] = byte(i)
 	}
@@ -201,7 +201,7 @@ func TestDialConnRestartsAfterSilence(t *testing.T) {
 	c.lastSend = clock.Now().Add(time.Millisecond)
 	c.mu.Unlock()
 	clock.Advance(2 * time.Second)
-	if _, err := c.write(make([]byte, 1200)); err != nil {
+	if _, err := c.write(make([]byte, 700)); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {

@@ -128,7 +128,7 @@ func TestInitVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inner := pattern(1200, 0)
+	inner := pattern(700, 0)
 	got, err := SealInit(keys, hx(t, v.Ephemeral.Repr), v.Init.TS, inner, v.Init.TotalLen)
 	if err != nil {
 		t.Fatalf("SealInit: %v", err)
@@ -227,5 +227,28 @@ func TestReplayWindow(t *testing.T) {
 	}
 	if w.Highest() != 1024 {
 		t.Errorf("Highest = %d, want 1024", w.Highest())
+	}
+}
+
+// N3-FIX: Inits of every length from the smallest to 1200 bytes seal and open.
+func TestInitRoundTripSmallSizes(t *testing.T) {
+	v := loadVectors(t)
+	keys, err := Derive(hx(t, v.Z), hx(t, v.MaskPub), hx(t, v.Ephemeral.Dirty), hx(t, v.Ephemeral.Repr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, total := range []int{MinInitLen, 400, 900, 1000, 1172, MaxFirstLen} {
+		inner := pattern(total-InitOverhead-17, 3)
+		dg, err := SealInit(keys, hx(t, v.Ephemeral.Repr), v.Init.TS, inner, total)
+		if err != nil {
+			t.Fatalf("total %d: %v", total, err)
+		}
+		if len(dg) != total {
+			t.Fatalf("total %d: datagram is %d bytes", total, len(dg))
+		}
+		got, err := OpenInit(keys, dg)
+		if err != nil || len(got.Inner) != len(inner) {
+			t.Fatalf("total %d: open: %v", total, err)
+		}
 	}
 }
