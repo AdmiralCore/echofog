@@ -314,16 +314,27 @@ func TestTransportConn(t *testing.T) {
 // away and fits the receive buffer, so a datagram that does not arrive within stallTimeout was
 // lost: the error names the chunk instead of waiting for a read deadline. The counter, the signals
 // and the timeout are passed in, so the wait can be tested without a socket.
+//
+// The receiver closes stop immediately after it counts the last batch, and the counter moves before
+// that close: a stop that arrives once the counter has reached end is a finished run, not a stall.
+// Both endings are checked against the counter again, because select sees stop and wake ready at
+// once and picks either.
 func waitForChunk(count func() int, from, end int, wake, stop <-chan struct{}, stopErr func() error, timeout <-chan time.Time) error {
 	for count() < end {
 		select {
 		case <-wake:
 		case <-stop:
+			if count() >= end {
+				return nil
+			}
 			if err := stopErr(); err != nil {
 				return err
 			}
 			return fmt.Errorf("receiver stopped at %d of %d datagrams", count(), totalDatagrams)
 		case <-timeout:
+			if count() >= end {
+				return nil
+			}
 			return fmt.Errorf("chunk [%d,%d) is not delivered: the receiver holds %d of %d datagrams after %s;"+
 				" a chunk of at most %d datagrams fits the %d-byte receive buffer, so a datagram was lost, not delayed",
 				from, end, count(), totalDatagrams, stallTimeout, maxWriteBatch, testRecvBuffer)
