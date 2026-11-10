@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -263,6 +264,48 @@ func TestHeldAfterTheTunnelIsLostAndStop(t *testing.T) {
 	}
 	if st := w.a.WholeComputerStatus(); st.State != tun.StateOff || len(w.kernel.Rules()) != 0 {
 		t.Fatalf("after Stop: %v, %d rules", st.State, len(w.kernel.Rules()))
+	}
+}
+
+// The status is one snapshot: the reason arrives with the state, never after it. Under load the
+// switch turns held a moment before the reason reaches the app; a reader must not see the pair torn
+// apart, or the screen says "held" with nothing to explain it.
+func TestStatusIsOneSnapshotWhileTheTunnelIsLost(t *testing.T) {
+	w := newWholeRig(t)
+	w.startVPN(t)
+	if err := w.a.WholeComputerStart(bg); err != nil {
+		t.Fatal(err)
+	}
+	var torn atomic.Int32
+	done := make(chan struct{})
+	var readers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				if st := w.a.WholeComputerStatus(); st.State == tun.StateHeld && st.Err == "" {
+					torn.Add(1)
+				}
+			}
+		}()
+	}
+	for i := 0; i < 200; i++ {
+		w.tn.Kill(errors.New("helper killed"))
+		eventually(t, func() bool { return w.a.WholeComputerStatus().State == tun.StateHeld })
+		if err := w.a.WholeComputerStart(bg); err != nil {
+			t.Fatalf("round %d: Start from held: %v", i, err)
+		}
+	}
+	close(done)
+	readers.Wait()
+	if n := torn.Load(); n > 0 {
+		t.Fatalf("the status said held without a reason %d times", n)
 	}
 }
 

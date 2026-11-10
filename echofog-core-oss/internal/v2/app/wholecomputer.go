@@ -79,6 +79,7 @@ type wholeState struct {
 
 	mu      sync.Mutex // guards the fields below; never held across a driver call
 	sw      *tun.Switch
+	state   tun.State        // the state the switch last reported, with err below: one snapshot
 	node    string           // the exit the seen addresses belong to
 	seen    []netip.AddrPort // first hops of the sessions to that exit
 	applied []tun.Endpoint   // what the firewall was last given
@@ -99,7 +100,7 @@ func (a *App) wholeSwitch(plan tun.Plan, tc tun.TunConfig) *tun.Switch {
 			PollInterval: cfg.PollInterval,
 			OnState: func(st tun.State, err error) {
 				w.mu.Lock()
-				w.err = ""
+				w.state, w.err = st, ""
 				if err != nil {
 					w.err = err.Error()
 				}
@@ -282,16 +283,17 @@ func (a *App) wholeStopIfOn() {
 	}
 }
 
-// WholeComputerStatus reports the state of the mode.
+// WholeComputerStatus reports the state of the mode. The state and the reason are one snapshot: the
+// switch reports them together, and a reader never sees a state that has outrun its reason.
 func (a *App) WholeComputerStatus() WholeStatus {
 	w := &a.whole
 	w.mu.Lock()
-	sw, err := w.sw, w.err
+	sw, st, err := w.sw, w.state, w.err
 	w.mu.Unlock()
 	if sw == nil {
 		return WholeStatus{}
 	}
-	return WholeStatus{State: sw.State(), Err: err}
+	return WholeStatus{State: st, Err: err}
 }
 
 // WholeComputerRecover finds filters an earlier run left and holds the computer closed; call it
