@@ -37,6 +37,7 @@ usage:
                          [--port N] [--domain NAME] [--start] [--yes] [--lang ru|en]   (root; verifies before installing)
   echofog-node v2 uninstall [--data DIR] [--purge [--yes]] [--lang ru|en]            (root)
   echofog-node v2 doctor --data DIR [--dns] [--lang ru|en]
+  echofog-node v2 doctor --cover [HOST:PORT] --advertise IP [--site-dir DIR] [--data DIR] [--lang ru|en]
   echofog-node v2 update --manifest-url URL [--check] [--yes] [--lang ru|en]
   echofog-node v2 invite create --data DIR [--access 30d] [--link 7d] [--max-entries N] [--out FILE]
   echofog-node v2 invite list   --data DIR
@@ -47,8 +48,9 @@ setup prints the recovery phrase once and keeps it in recovery-phrase.txt until 
 confirms; the plain mode (no terminal, CI, ssh -T) never prints it or the operator token.
 status, invite and rotate-keys talk to the running node through its operator API on 127.0.0.1 with
 the token in DIR/operator.token. entry reads the profile and needs no running node. doctor sends
-nothing out unless --dns is given. update installs nothing without a yes from the operator and never
-goes back to an older version.
+nothing out unless --dns is given; with --cover it sends DNS, one TCP probe, one TLS handshake and one
+GET to the cover's own name and address, so the cover can be checked before the profile exists.
+update installs nothing without a yes from the operator and never goes back to an older version.
 Every flag may also be set by the environment: --data is ECHOFOG_DATA_DIR.
 `
 

@@ -306,10 +306,14 @@ func terminalWidth() int {
 }
 
 func cmdDoctor(args []string, env func(string) string, out io.Writer) error {
+	args = bareCover(args)
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	data := dataFlag(fs, env)
 	langFlag := fs.String("lang", "", "ru or en")
 	dns := fs.Bool("dns", false, "look the cover domain up through the system resolver")
+	cover := fs.String("cover", env("ECHOFOG_COVER"), "host:port of the cover: checks DNS, TCP, TLS and the site")
+	advertise := fs.String("advertise", env("ECHOFOG_ADVERTISE_ADDR"), "public IP the cover name must resolve to")
+	siteDir := fs.String("site-dir", env("ECHOFOG_SITE_DIR"), "folder with the site of the cover")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -317,15 +321,34 @@ func cmdDoctor(args []string, env func(string) string, out io.Writer) error {
 	if len(pos) != 0 {
 		return usageError{fmt.Errorf("unexpected arguments: %v", pos)}
 	}
+	coverGiven := false
+	fs.Visit(func(f *flag.Flag) { coverGiven = coverGiven || f.Name == "cover" })
+	lang := langOf(*langFlag, env)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if coverGiven {
+		// The cover preflight: the cover comes from the flags or from the profile, and the profile
+		// itself is optional, so the owner can check everything before the first start.
+		deps := CoverDeps{Cover: *cover, Advertise: *advertise, SiteDir: *siteDir, Now: time.Now, Resolve: lookupNetIP}
+		if pc := profileConfig(*data); pc != nil {
+			if deps.Cover == "" {
+				deps.Cover = pc.Cover
+			}
+			if deps.Advertise == "" && len(pc.Listen) > 0 {
+				deps.Advertise = pc.Listen[0].Advertise
+			}
+			if deps.SiteDir == "" {
+				deps.SiteDir = pc.SiteDir
+			}
+		}
+		return reportDoctor(out, lang, RunCoverDoctor(ctx, deps))
+	}
 	if err := needData(*data); err != nil {
 		return err
 	}
-	lang := langOf(*langFlag, env)
 	deps := DoctorDeps{DataDir: *data, Version: BuildVersion, FreeBytes: FreeBytes}
 	if *dns {
-		deps.Resolve = func(ctx context.Context, host string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		}
+		deps.Resolve = lookupNetIP
 	}
 	if c, err := newClient(*data); err == nil {
 		deps.NodeStatus = func(ctx context.Context) (*StatusInfo, error) {
@@ -336,9 +359,48 @@ func cmdDoctor(args []string, env func(string) string, out io.Writer) error {
 			return &st, nil
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	results := RunDoctor(ctx, deps)
+	return reportDoctor(out, lang, RunDoctor(ctx, deps))
+}
+
+// lookupNetIP is the system resolver. It returns the addresses of the whole CNAME chain, so a name
+// that is an alias is checked at its end.
+func lookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+// profileConfig reads server.json when the profile exists; a missing or broken profile is not an
+// error here, the checks report what they can without it.
+func profileConfig(dir string) *Config {
+	if dir == "" {
+		return nil
+	}
+	raw, err := readLimited(filepath.Join(dir, configFileName), MaxConfigSize)
+	if err != nil {
+		return nil
+	}
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		return nil
+	}
+	return cfg
+}
+
+// bareCover turns a lone --cover into --cover=, so the flag both names a cover and asks for the one
+// in the profile.
+func bareCover(args []string) []string {
+	out := append([]string(nil), args...)
+	for i, a := range out {
+		if a != "--cover" {
+			continue
+		}
+		if i+1 == len(out) || strings.HasPrefix(out[i+1], "-") {
+			out[i] = "--cover="
+		}
+	}
+	return out
+}
+
+func reportDoctor(out io.Writer, lang string, results []CheckResult) error {
 	warns, fails := 0, 0
 	for _, r := range results {
 		fmt.Fprintln(out, r.Text(lang))
