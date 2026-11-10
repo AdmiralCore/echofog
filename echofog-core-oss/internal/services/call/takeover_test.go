@@ -254,10 +254,15 @@ func TestRoom_ASmallerHalfYieldsToTheLarger(t *testing.T) {
 
 	// the halves meet again: the larger one is the call. The lone coordinator of the smaller half
 	// yields when a heartbeat of the larger one reaches it, which on a loaded runner takes longer
-	// than the election windows that produced the split.
+	// than the election windows that produced the split: 4.9-6.9 s measured here, past 45 s on the
+	// 2-core CI race job. 120 s leaves the CI's worst over twice the headroom; the yield is
+	// retried (a join every second, a reconcile every second, heartbeats every 200-500 ms), so a
+	// ceiling this wide cannot hide halves that never meet.
 	cut.Store(false)
-	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 45*time.Second, 100*time.Millisecond,
+	meet := time.Now()
+	require.Eventually(t, func() bool { return roomConverged(nodes, nil) }, 120*time.Second, 100*time.Millisecond,
 		"the halves stayed apart: %v", dumpRoom(nodes, nil))
+	t.Logf("the halves became one room in %v", time.Since(meet).Round(100*time.Millisecond))
 	for _, nd := range nodes {
 		s, ok := nd.cm.Snapshot()
 		require.True(t, ok)
