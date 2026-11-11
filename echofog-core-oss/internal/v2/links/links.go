@@ -19,6 +19,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node"
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
+	"github.com/echofog/echofog-core/internal/v2/session"
 )
 
 // Errors for the UI; UserMessage turns them into Russian texts.
@@ -31,10 +32,18 @@ var (
 	ErrMismatch = errors.New("links: link and card do not match")
 	// ErrExpired reports a link whose card has expired.
 	ErrExpired = errors.New("links: link expired")
-	// ErrRevoked reports an invitation that could not be used. A hidden node closes silently on
-	// every failure (handshake.md §5), so a revoked, expired or used-up invitation and an offline
-	// node look the same from outside: the joiner is told "revoked or no longer valid".
+	// ErrRevoked reports an invitation the node itself refused: it answered the attempt and closed
+	// it. The hidden node answers every refusal the same way (handshake.md §5), so a revoked,
+	// expired and used-up invitation look the same from outside.
 	ErrRevoked = errors.New("links: link revoked")
+	// ErrUnreachable reports an invitation attempt that never got an answer: a closed UDP port, a
+	// wrong address, a timeout. It is not a verdict about the invitation, and the UI must not call
+	// it "revoked".
+	ErrUnreachable = errors.New("links: the node did not answer")
+	// ErrClock reports a card whose lifetime does not fit the device clock: a card issued for the
+	// protocol maximum is seen by a device whose clock is behind as "lifetime too long". It is a
+	// clock problem, not a damaged link, and the fix is to synchronise the clock.
+	ErrClock = errors.New("links: card lifetime does not fit the device clock")
 	// ErrNoContactLink reports a node without a public card (hidden, anonymous, or no cover).
 	ErrNoContactLink = errors.New("links: node has no contact link")
 	// ErrNoInviter reports Invite on a node without an access manager.
@@ -255,6 +264,8 @@ func open(text string, now time.Time) (*Preview, *objects.Link, error) {
 		switch {
 		case cerr == nil:
 			return nil, nil, fmt.Errorf("%w: %v", ErrMismatch, err)
+		case errors.Is(cerr, objects.ErrLifetime):
+			return nil, nil, fmt.Errorf("%w: %v", ErrClock, cerr)
 		case errors.Is(cerr, objects.ErrExpired):
 			return nil, nil, ErrExpired
 		default:
@@ -292,7 +303,13 @@ func (s *Service) Redeem(ctx context.Context, link string) (node.Peer, error) {
 	device := node.DeviceID(pv.Device)
 	peer, _, err := s.cfg.Dialer.Session(ctx, device, node.DialOpt{Card: pv.Card, AccessSecret: secret})
 	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// A timeout is the shape a closed UDP port takes: no answer arrived, so it is the
+		// transport talking, not the invitation. A cancellation is the caller's own decision and
+		// stays as it is.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return node.Peer{}, fmt.Errorf("%w: %v", ErrUnreachable, err)
+		}
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return node.Peer{}, err
 		}
 		// A refusal of the route policy is a clear answer, not a silent close: it must not read as
@@ -301,7 +318,13 @@ func (s *Service) Redeem(ctx context.Context, link string) (node.Peer, error) {
 			return node.Peer{}, err
 		}
 		if pv.Kind == KindInvitation {
-			return node.Peer{}, fmt.Errorf("%w: %v", ErrRevoked, err)
+			// The node closed the handshake itself: the invitation was refused (revoked, used up,
+			// expired). Anything else never reached a verdict — a closed port or a timeout must
+			// not read as "revoked".
+			if errors.Is(err, session.ErrSilent) {
+				return node.Peer{}, fmt.Errorf("%w: %v", ErrRevoked, err)
+			}
+			return node.Peer{}, fmt.Errorf("%w: %v", ErrUnreachable, err)
 		}
 		return node.Peer{}, err
 	}
@@ -317,6 +340,10 @@ func UserMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrOtherVersion):
 		return "Ссылка создана другой версией EchoFog"
+	case errors.Is(err, ErrClock):
+		return "Время на устройстве отличается от времени узла — синхронизируйте часы и повторите"
+	case errors.Is(err, ErrUnreachable):
+		return "Узел не отвечает: проверьте, что он включён и UDP-порт открыт в файрволе"
 	case errors.Is(err, ErrRevoked):
 		return "Ссылка отозвана или больше не действует"
 	case errors.Is(err, ErrNotLink):

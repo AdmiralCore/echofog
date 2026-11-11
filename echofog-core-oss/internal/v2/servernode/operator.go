@@ -54,6 +54,12 @@ type StatusInfo struct {
 	// Visibility is "visible" or "hidden"; Limits is the configured cap (zero means none).
 	Visibility string     `json:"visibility,omitempty"`
 	Limits     LimitsSpec `json:"limits,omitempty"`
+	// Public tells whether the entry line grants access on its own: only a node with a public card
+	// does. Access is "public" or "invite", the same fact in one word.
+	Public bool   `json:"public"`
+	Access string `json:"access,omitempty"`
+	// InviteListen is the host:port invitation cards point to; empty without an invite listener.
+	InviteListen string `json:"invite_listen,omitempty"`
 	// Traffic counters of the carriers: since the start and since 00:00 UTC.
 	TrafficIn     uint64 `json:"traffic_in,omitempty"`
 	TrafficOut    uint64 `json:"traffic_out,omitempty"`

@@ -997,6 +997,16 @@ func (s *Server) Status() StatusInfo {
 	}
 	ic, perr := s.builder.Current(ctx, objects.ScopePublic)
 	st.PublicCard = perr == nil
+	st.Public = st.PublicCard
+	st.Access = "invite"
+	if st.PublicCard {
+		st.Access = "public"
+	}
+	if il := s.cfg.InviteListen; il != nil {
+		if _, port, err := net.SplitHostPort(il.Bind); err == nil {
+			st.InviteListen = net.JoinHostPort(il.Advertise, port)
+		}
+	}
 	if perr == nil {
 		// The public link carries the public card only (no access secret, D37): it is what the
 		// operator shows on the site and in "v2 status".

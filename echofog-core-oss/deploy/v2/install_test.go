@@ -94,7 +94,7 @@ func TestVPSGuides(t *testing.T) {
 		t.Error("the guides do not link to each other")
 	}
 	for name, doc := range map[string]string{"en": en, "ru": ru} {
-		for _, must := range []string{"install.sh", "v2 doctor", "v2 status", "ECHOFOG_RELEASE_URL", "udp", "docker compose", "recovery-phrase.txt", "systemctl"} {
+		for _, must := range []string{"install.sh", "v2 doctor", "v2 status", "v2 link check", "ECHOFOG_RELEASE_URL", "udp", "444/udp", "445/udp", "docker compose", "recovery-phrase.txt", "systemctl"} {
 			if !strings.Contains(strings.ToLower(doc), strings.ToLower(must)) {
 				t.Errorf("%s guide lacks %q", name, must)
 			}

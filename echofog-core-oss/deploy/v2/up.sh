@@ -406,6 +406,30 @@ wait_healthy() {
 	done
 }
 
+# firewall_help prints the exact ports this configuration uses and the commands that open them:
+# the operator should not have to derive the invitation port from the cover and the base port.
+firewall_help() {
+	udp=$PORT
+	if [ -n "$COVER" ]; then
+		udp="$udp,$NOISE_PORT"
+	fi
+	if [ "$INVITES" = 1 ]; then
+		udp="$udp,$INVITE_PORT"
+	fi
+	printf '\nPorts %s/tcp and %s/udp must be open in the firewall and in the provider panel; UDP matters as much as TCP.\n' "$PORT" "$udp"
+	if [ "$INVITES" = 1 ]; then
+		printf 'Invitation links point to %s/udp.\n' "$INVITE_PORT"
+	fi
+	printf 'On the server (ufw):\n'
+	printf '  sudo ufw allow %s/tcp\n' "$PORT"
+	for p in $(printf '%s' "$udp" | tr ',' ' '); do
+		printf '  sudo ufw allow %s/udp\n' "$p"
+	done
+	printf 'In the cloud panel (GCP shown; AWS and Azure keep the same ports):\n'
+	printf '  gcloud compute firewall-rules create echofog-tcp --allow tcp:%s --source-ranges 0.0.0.0/0 --direction INGRESS\n' "$PORT"
+	printf '  gcloud compute firewall-rules create echofog-udp --allow udp:%s --source-ranges 0.0.0.0/0 --direction INGRESS\n' "$udp"
+}
+
 teardown() {
 	printf 'Teardown of the test run (removes the container and the volume):\n'
 	printf '  %s\n' "$(dead down -v)"
@@ -435,6 +459,7 @@ if [ "$DRY" = 1 ]; then
 		printf '[dry-run] invitations are off: the node starts without --invites\n'
 	fi
 	profile_note
+	firewall_help
 	if [ "$TEST" = 1 ]; then
 		teardown
 	fi
@@ -462,24 +487,15 @@ if [ "$INVITES" = 1 ]; then
 	printf '\nInvitation (the link is written where only the node user can read it):\n'
 	printf '  %s\n' "$(dead exec -T node echofog-node v2 invite create --data /data --access 30d --out /data/invite.txt)"
 	printf '  %s\n' "$(dead exec -T node cat /data/invite.txt)"
+	printf 'If the link does not open, compare the clocks first (`date -u` here and on the device),\n'
+	printf 'then check the link itself: echofog-node v2 link check LINK.\n'
 else
 	printf '\nInvitations are off: the node was started without --invites.\n'
 	printf 'For invitation links, add --invites and start again on a fresh volume: the listener is set only at the first start.\n'
 fi
 
 profile_note
-
-printf '\nPorts %s/tcp and %s/udp' "$PORT" "$PORT"
-if [ -n "$COVER" ]; then
-	printf ' (noise3 %s/udp' "$NOISE_PORT"
-	if [ "$INVITES" = 1 ]; then
-		printf ', invitations %s/udp' "$INVITE_PORT"
-	fi
-	printf ')'
-elif [ "$INVITES" = 1 ]; then
-	printf ' (invitations %s/udp)' "$INVITE_PORT"
-fi
-printf ' must be open in the firewall and in the provider panel; UDP matters as much as TCP.\n'
+firewall_help
 
 if [ "$TEST" = 1 ]; then
 	printf '\nThe test run writes the same %s as a real node: do not start it next to one.\n' "$ENVFILE"

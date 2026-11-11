@@ -43,8 +43,9 @@ const (
 	// KeysPerListener is the L0 limit of wire.md §2.1: at most 8 live masking keys per listener.
 	// More pending invitations share a key or the runtime opens another listener.
 	KeysPerListener = 8
-	// DefaultLinkTTL is the invitation link lifetime (objects.md §10.3, D12).
-	DefaultLinkTTL = objects.InviteCardMaxLifetime * time.Second
+	// DefaultLinkTTL is the invitation link lifetime (objects.md §10.3, D12). It is the card's
+	// own lifetime: a link that outlives its card would stop opening before its printed date.
+	DefaultLinkTTL = objects.InviteCardLifetime * time.Second
 	// DefaultAccessTTL is how long a contact keeps access after the first entry.
 	DefaultAccessTTL = 30 * 24 * time.Hour
 	// MaxPersonalTTL is the one-year upper bound of a personal pass (handshake.md §5).
@@ -118,7 +119,7 @@ type Config struct {
 	Clock Clock
 	// Rand is the randomness source; nil means crypto/rand.
 	Rand io.Reader
-	// LinkTTL overrides DefaultLinkTTL (capped at 30 days).
+	// LinkTTL overrides DefaultLinkTTL (capped at the invitation card's lifetime).
 	LinkTTL time.Duration
 	// AccessTTL overrides DefaultAccessTTL (capped at MaxPersonalTTL).
 	AccessTTL time.Duration
@@ -370,8 +371,11 @@ func New(cfg Config) (*Manager, error) {
 	if m.linkTTL == 0 {
 		m.linkTTL = DefaultLinkTTL
 	}
-	if m.linkTTL < 0 || m.linkTTL > DefaultLinkTTL {
+	if m.linkTTL < 0 || m.linkTTL > objects.InviteCardMaxLifetime*time.Second {
 		return nil, fmt.Errorf("%w: link lifetime %v", ErrConfig, m.linkTTL)
+	}
+	if m.linkTTL > DefaultLinkTTL {
+		m.linkTTL = DefaultLinkTTL
 	}
 	if m.accessTTL == 0 {
 		m.accessTTL = DefaultAccessTTL
@@ -541,8 +545,13 @@ func (m *Manager) Mint(ctx context.Context, opt MintOptions) (*Minted, error) {
 	if linkTTL == 0 {
 		linkTTL = m.linkTTL
 	}
-	if linkTTL <= 0 || linkTTL > DefaultLinkTTL {
+	if linkTTL <= 0 || linkTTL > objects.InviteCardMaxLifetime*time.Second {
 		return nil, fmt.Errorf("%w: link lifetime %v", ErrConfig, linkTTL)
+	}
+	if linkTTL > DefaultLinkTTL {
+		// The card is issued for InviteCardLifetime. A link asked for the protocol's maximum is cut
+		// to the card's lifetime instead of promising a date the link cannot reach.
+		linkTTL = DefaultLinkTTL
 	}
 	accessTTL := opt.AccessTTL
 	if accessTTL == 0 {

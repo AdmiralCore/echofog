@@ -101,6 +101,34 @@ func TestCLIEntryParsesAndMatchesProfile(t *testing.T) {
 	if strings.Contains(errs, hex.EncodeToString(priv)) {
 		t.Fatal("the masking private key went to stderr")
 	}
+	// A node without a cover serves invitees only: the line is an address, and stderr says so
+	// without polluting the line list on stdout.
+	if !strings.Contains(errs, "no public card") || !strings.Contains(errs, "invite create") {
+		t.Fatalf("entry does not warn about an invite-only node: %q", errs)
+	}
+}
+
+// With a cover the node has a public card, and the entry line is the permanent access of the
+// operator's own clients: no warning.
+func TestCLIEntryDoesNotWarnWithACover(t *testing.T) {
+	cfg := servernode.DefaultConfig()
+	cfg.Listen = []servernode.ListenSpec{{Suite: "noise3", Bind: fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t)), Advertise: "203.0.113.10"}}
+	cfg.Cover = "node.example.org:443"
+	cfg.SiteDir = t.TempDir()
+	dir := filepath.Join(t.TempDir(), "node")
+	if _, err := servernode.Init(dir, cfg); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	code, out, errs := runCLI(nil, "entry", "--data", dir)
+	if code != 0 {
+		t.Fatalf("entry: %d %q", code, errs)
+	}
+	if lines := entryLines(t, out); len(lines) != 1 {
+		t.Fatalf("entry printed %d lines:\n%s", len(lines), out)
+	}
+	if strings.Contains(errs, "no public card") {
+		t.Fatalf("a covered node warns about invite-only access: %q", errs)
+	}
 }
 
 func TestCLIEntryOneLinePerNoise3Listener(t *testing.T) {
@@ -147,11 +175,14 @@ func TestStatusJSONEntries(t *testing.T) {
 		t.Fatalf("status: %d %q", code, errs)
 	}
 	var st struct {
-		NodeID   string   `json:"node_id"`
-		DeviceID string   `json:"device_id"`
-		Roles    []string `json:"roles"`
-		Entry    string   `json:"entry"`
-		Entries  []string `json:"entries"`
+		NodeID       string   `json:"node_id"`
+		DeviceID     string   `json:"device_id"`
+		Roles        []string `json:"roles"`
+		Entry        string   `json:"entry"`
+		Entries      []string `json:"entries"`
+		Access       string   `json:"access"`
+		Public       bool     `json:"public"`
+		InviteListen string   `json:"invite_listen"`
 	}
 	if err := json.Unmarshal([]byte(raw), &st); err != nil {
 		t.Fatalf("status JSON: %v\n%s", err, raw)
@@ -166,5 +197,8 @@ func TestStatusJSONEntries(t *testing.T) {
 	}
 	if st.Entry != want[0] {
 		t.Fatalf("status entry %q, want %q", st.Entry, want[0])
+	}
+	if st.Access != "invite" || st.Public {
+		t.Fatalf("access %q public %v, want an invite-only node without a public card", st.Access, st.Public)
 	}
 }

@@ -46,7 +46,7 @@ const RepublishBefore = 2 * 24 * time.Hour
 // Card lifetime bounds (objects.md §3.2, D12).
 const (
 	cardLifetime   = objects.CardMaxLifetime * time.Second
-	inviteLifetime = objects.InviteCardMaxLifetime * time.Second
+	inviteLifetime = objects.InviteCardLifetime * time.Second
 )
 
 // Processing limits of the card body (objects.md §3.1).

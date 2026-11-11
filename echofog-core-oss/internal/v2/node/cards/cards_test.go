@@ -171,7 +171,7 @@ func TestInviteCard(t *testing.T) {
 	if inv.Scope != objects.ScopeInvite {
 		t.Fatalf("scope = %s", inv.Scope)
 	}
-	if inv.NotAfter != uint64(clk.Now().Unix())+uint64(objects.InviteCardMaxLifetime) {
+	if inv.NotAfter != uint64(clk.Now().Unix())+uint64(objects.InviteCardLifetime) {
 		t.Fatalf("invite not_after = %d", inv.NotAfter)
 	}
 	c := verifyBytes(t, inv.Envelope, clk.Now())

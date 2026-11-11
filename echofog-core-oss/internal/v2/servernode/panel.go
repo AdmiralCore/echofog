@@ -73,6 +73,9 @@ func RenderStatusPanel(st StatusInfo, upd *UpdateInfo, updateErr error, lang str
 	if st.Invites > 0 {
 		rows = append(rows, row(Message(lang, "panel.invites"), strconv.Itoa(st.Invites)))
 	}
+	if st.InviteListen != "" {
+		rows = append(rows, row(Message(lang, "panel.invite-listen"), st.InviteListen))
+	}
 	if st.PublicLink != "" {
 		rows = append(rows, row(Message(lang, "panel.link"), st.PublicLink))
 	}

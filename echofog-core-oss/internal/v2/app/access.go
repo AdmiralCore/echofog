@@ -17,7 +17,7 @@ const (
 	keyMode = "mode"
 
 	maxTermDays  = 3650
-	maxLinkHours = 24 * 365
+	maxLinkHours = 24 * 30
 	maxEntries   = 1000
 )
 

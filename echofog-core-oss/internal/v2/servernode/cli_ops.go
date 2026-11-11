@@ -311,6 +311,7 @@ func cmdDoctor(args []string, env func(string) string, out io.Writer) error {
 	data := dataFlag(fs, env)
 	langFlag := fs.String("lang", "", "ru or en")
 	dns := fs.Bool("dns", false, "look the cover domain up through the system resolver")
+	linkText := fs.String("link", "", "also check this link offline (a doctor line, no network)")
 	cover := fs.String("cover", env("ECHOFOG_COVER"), "host:port of the cover: checks DNS, TCP, TLS and the site")
 	advertise := fs.String("advertise", env("ECHOFOG_ADVERTISE_ADDR"), "public IP the cover name must resolve to")
 	siteDir := fs.String("site-dir", env("ECHOFOG_SITE_DIR"), "folder with the site of the cover")
@@ -359,7 +360,11 @@ func cmdDoctor(args []string, env func(string) string, out io.Writer) error {
 			return &st, nil
 		}
 	}
-	return reportDoctor(out, lang, RunDoctor(ctx, deps))
+	results := RunDoctor(ctx, deps)
+	if *linkText != "" {
+		results = append(results, LinkCheckResult(*linkText))
+	}
+	return reportDoctor(out, lang, results)
 }
 
 // lookupNetIP is the system resolver. It returns the addresses of the whole CNAME chain, so a name

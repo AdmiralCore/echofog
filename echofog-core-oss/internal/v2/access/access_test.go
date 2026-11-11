@@ -95,6 +95,40 @@ func TestMintCreatesInvitationCardAndLink(t *testing.T) {
 	}
 }
 
+// TestMintKeepsTheLinkInsideTheCard covers the first-run failure: a link asked for the protocol
+// maximum (30 days) must not promise a date beyond the card's own lifetime, and anything longer is
+// refused before an invitation is recorded.
+func TestMintKeepsTheLinkInsideTheCard(t *testing.T) {
+	r := newRig(t)
+	ctx := t.Context()
+
+	minted, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: time.Duration(objects.InviteCardMaxLifetime) * time.Second})
+	if err != nil {
+		t.Fatalf("Mint(30d): %v", err)
+	}
+	if got := minted.LinkExpires.Sub(r.clock.Now()); got != access.DefaultLinkTTL {
+		t.Fatalf("link expires in %v, want the card lifetime %v", got, access.DefaultLinkTTL)
+	}
+	if got := int64(minted.LinkExpires.Unix()); got != r.clock.Now().Unix()+int64(objects.InviteCardLifetime) {
+		t.Fatalf("link expiry %d, want now+%d", got, objects.InviteCardLifetime)
+	}
+	card := linkCard(t, minted.Link)
+	if got := int64(card.Env.NotAfter); got != r.clock.Now().Unix()+int64(objects.InviteCardLifetime) {
+		t.Fatalf("card not_after %d, want now+%d", got, objects.InviteCardLifetime)
+	}
+	// A device one second behind already needed the margin; the card must verify there too.
+	if _, err := objects.VerifyCard(minted.Card, r.clock.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("a card a second behind: %v", err)
+	}
+
+	if _, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: 31 * 24 * time.Hour}); !errors.Is(err, access.ErrConfig) {
+		t.Fatalf("Mint(31d): %v, want ErrConfig", err)
+	}
+	if _, err := r.mgr.Mint(ctx, access.MintOptions{LinkTTL: time.Duration(objects.InviteCardMaxLifetime+1) * time.Second}); !errors.Is(err, access.ErrConfig) {
+		t.Fatalf("Mint(30d+1s): %v, want ErrConfig", err)
+	}
+}
+
 // TestInviteCardNeverCarriesTheContactsKeyOrAddress is the explicit decision on the T4.2a
 // Medium risk: an invitation card names only the invitation's own key and listener, never the
 // contacts masking key or the contacts listener (objects.md §10.3, wire.md §2.1).

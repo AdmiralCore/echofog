@@ -312,6 +312,10 @@ group; `ufw` alone is not enough. UDP matters as much as TCP: the main path is Q
 node whose UDP port is closed looks alive but gets no peers. A blocked UDP port cannot be tested with
 a simple connection check, because nothing answers either way.
 
+`up.sh` prints this exact list and ready `ufw` and `gcloud` commands for the configuration it
+wrote: the invitation port depends on the cover and on `ECHOFOG_PORT`, so take the numbers from that
+output instead of deriving them here.
+
 ## 7. Start the node
 
 `$DC` is the shorthand chosen in section 5. Check what Compose is about to do, then pull and start:
@@ -390,7 +394,18 @@ $DC exec node echofog-node v2 invite list --data /data
 
 `invite create` prints the link; `--access 30d` is how long the person may use the node, `--link 7d`
 would limit the link itself, and `--max-entries` limits how many people may use it. Hand the link over
-a channel you trust.
+a channel you trust. The link itself lives at most 30 days, the same as its card; a longer `--link`
+is refused.
+
+Check a link offline before handing it over:
+
+```sh
+$DC exec node echofog-node v2 link check 'echofog://join?...'
+```
+
+It prints `ok`, `expired`, `damaged`, `other version`, `not a link` or `clock`. `clock` means the
+time on this device differs from the node's: synchronise it and open the same link again. The same
+verdict is a doctor line: `v2 doctor --data /data --link LINK`.
 
 **The public card.** With a cover, `status` prints the public link (and the matching entry for a node
 list) once the card is issued. That needs the domain's DNS to point at `ECHOFOG_ADVERTISE_ADDR`, the
@@ -472,6 +487,9 @@ cd ../.. && rm -rf echofog
 | `doctor --cover` reports a DNS mismatch, a closed port or a bad certificate | A tester would not get the cover: the name, the port or the certificate is not ready | Fix the line the check names; section 5 describes the preflight |
 | Peers do not connect, `status` shows no sessions | UDP 443 is closed in `ufw` or in the provider's panel, or `ECHOFOG_ADVERTISE_ADDR` is not the address the Internet sees | Open 443/udp in both places; compare the address with the provider's console |
 | Invitations are refused | `ECHOFOG_INVITES` was `false` at the first start | Edit `server.json` and add the invite listener (section 5), or, on a node not yet in use, start over with an empty volume; then publish the port |
+| An invitation link says "revoked" at once, while `invite list` shows `entries 0/1` | The request never reached the node: the invitation UDP port is closed, or the node is unreachable | Open the exact port `up.sh` printed (`444/udp`, `445/udp`, or `8444/udp` with `--port 8443`) in `ufw` **and** in the cloud panel; `v2 link check LINK` tells a link problem from a network one |
+| A link says its card is "too long", "damaged", or the app reports a clock problem | The device clock differs from the node's | `date -u` on the server and on the device; `timedatectl set-ntp true` on the server, synchronise the device, then open the same link again — no new invitation is needed |
+| `v2 entry` warns that the line is an address only | The node has no cover (or is hidden), so it has no public card and serves invitees only | Send an invitation link (`v2 invite create`), or add a cover and a site so the line becomes a permanent entry |
 | Clock warnings in `status` or `doctor` | Time is not synchronised | `timedatectl set-ntp true` |
 | `doctor` reports little disk space | Docker images, logs or the host's own data | `docker system prune`, check `df -h /`; log size is capped by the compose file |
 | `exec` says the node is not running | The container is stopped, or the profile has no `operator.addr` | `$DC ps`, `$DC logs --tail=100 node` |

@@ -22,6 +22,7 @@ import (
 	"github.com/echofog/echofog-core/internal/v2/node/cards"
 	"github.com/echofog/echofog-core/internal/v2/objects"
 	"github.com/echofog/echofog-core/internal/v2/secret"
+	"github.com/echofog/echofog-core/internal/v2/session"
 	"github.com/echofog/echofog-core/internal/v2/store"
 )
 
@@ -496,6 +497,14 @@ func TestOpenExpired(t *testing.T) {
 	if _, err := links.Open(l.URL, testNow); err != nil {
 		t.Fatalf("a fresh card: %v", err)
 	}
+	// A device clock two hours behind sees a card that is long by the skew it already tolerates:
+	// the answer is "sync the clock", not "the link is damaged".
+	if _, err := links.Open(l.URL, testNow.Add(-2*time.Hour)); !errors.Is(err, links.ErrClock) || errors.Is(err, links.ErrMismatch) {
+		t.Fatalf("a card beyond the clock tolerance: %v, want ErrClock", err)
+	}
+	if msg := links.UserMessage(fmt.Errorf("wrapped: %w", links.ErrClock)); !strings.Contains(msg, "синхронизируйте часы") {
+		t.Fatalf("user message %q", msg)
+	}
 	clk.Advance(365 * 24 * time.Hour)
 	if _, err := s.Open(l.URL); !errors.Is(err, links.ErrExpired) {
 		t.Fatalf("Service.Open must use its clock: %v", err)
@@ -579,17 +588,36 @@ func TestRedeemFailures(t *testing.T) {
 	hid := newRig(t, cards.Hidden)
 	boom := errors.New("carrier: all attempts failed")
 
-	t.Run("invitation not reachable reads as revoked", func(t *testing.T) {
-		d := &fakeDialer{err: boom}
+	t.Run("invitation refused by the node reads as revoked", func(t *testing.T) {
+		d := &fakeDialer{err: fmt.Errorf("session: %w", session.ErrSilent)}
 		s := hid.service(t, d)
 		inv, err := s.Invite(t.Context(), access.MintOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		// A hidden node closes silently on every failure (handshake.md §5), so a revoked pass,
-		// a used-up one and an offline node look the same to the joiner.
+		// A hidden node closes silently on every refusal (handshake.md §5): the node answered,
+		// so a revoked, used-up or expired pass is the verdict.
 		if _, err := s.Redeem(t.Context(), inv.URL); !errors.Is(err, links.ErrRevoked) {
 			t.Fatalf("Redeem: %v", err)
+		}
+	})
+	t.Run("invitation with no answer reads as unreachable", func(t *testing.T) {
+		// A closed UDP port, a timeout or a failed carrier dial never reaches the node: the
+		// invitation itself is not in question, and the UI must say "no answer", not "revoked".
+		for _, transport := range []error{boom, context.DeadlineExceeded} {
+			d := &fakeDialer{err: transport}
+			s := hid.service(t, d)
+			inv, err := s.Invite(t.Context(), access.MintOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.Redeem(t.Context(), inv.URL)
+			if !errors.Is(err, links.ErrUnreachable) || errors.Is(err, links.ErrRevoked) {
+				t.Fatalf("Redeem(%v): %v, want ErrUnreachable", transport, err)
+			}
+			if msg := links.UserMessage(err); !strings.Contains(msg, "не отвечает") {
+				t.Fatalf("user message %q", msg)
+			}
 		}
 	})
 	t.Run("route policy refusal is not revoked", func(t *testing.T) {
@@ -675,6 +703,8 @@ func TestUserMessages(t *testing.T) {
 	}{
 		{links.ErrOtherVersion, "другой версией"},
 		{links.ErrRevoked, "отозвана"},
+		{links.ErrUnreachable, "не отвечает"},
+		{links.ErrClock, "часы"},
 		{links.ErrNotLink, "не ссылка EchoFog"},
 		{fmt.Errorf("wrapped: %w", links.ErrNotLink), "не ссылка EchoFog"},
 		{links.ErrMismatch, "повреждена"},
