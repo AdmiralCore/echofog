@@ -3,6 +3,7 @@ package servernode
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/echofog/echofog-core/internal/v2/links"
 )
 
 const usageText = `echofog-node v2 — EchoFog v2 server node
@@ -36,12 +39,13 @@ usage:
   echofog-node v2 install --binary FILE --manifest FILE [--preset ... --advertise IP]
                          [--port N] [--domain NAME] [--start] [--yes] [--lang ru|en]   (root; verifies before installing)
   echofog-node v2 uninstall [--data DIR] [--purge [--yes]] [--lang ru|en]            (root)
-  echofog-node v2 doctor --data DIR [--dns] [--lang ru|en]
+  echofog-node v2 doctor --data DIR [--dns] [--link LINK] [--lang ru|en]
   echofog-node v2 doctor --cover [HOST:PORT] --advertise IP [--site-dir DIR] [--data DIR] [--lang ru|en]
   echofog-node v2 update --manifest-url URL [--check] [--yes] [--lang ru|en]
   echofog-node v2 invite create --data DIR [--access 30d] [--link 7d] [--max-entries N] [--out FILE]
   echofog-node v2 invite list   --data DIR
   echofog-node v2 invite extend --data DIR ID --access 7d
+  echofog-node v2 link check LINK                                  offline: does this link open?
   echofog-node v2 rotate-keys   --data DIR
 
 setup prints the recovery phrase once and keeps it in recovery-phrase.txt until the operator
@@ -133,11 +137,13 @@ func MainIO(args []string, env func(string) string, stdin io.Reader, stdout, std
 	case "run":
 		err = cmdRun(args[1:], env, stdout)
 	case "entry":
-		err = cmdEntry(args[1:], env, stdout)
+		err = cmdEntry(args[1:], env, stdout, stderr)
 	case "status":
 		err = cmdStatus(args[1:], env, stdout)
 	case "invite":
 		err = cmdInvite(args[1:], env, stdout)
+	case "link":
+		err = cmdLink(args[1:], stdout)
 	case "rotate-keys":
 		err = cmdRotate(args[1:], env, stdout)
 	default:
@@ -211,8 +217,10 @@ func cmdRun(args []string, env func(string) string, out io.Writer) error {
 
 // cmdEntry prints the permanent entry lines of a stopped or running node. It reads the profile
 // itself, so the operator can hand out the lines before the node is up. Only the public masking key
-// is printed; the private one stays on disk and is wiped with the device.
-func cmdEntry(args []string, env func(string) string, out io.Writer) error {
+// is printed; the private one stays on disk and is wiped with the device. A node without a cover
+// (or a hidden one) has no public card, so the line is an address only: the warning on stderr says
+// that a person still needs an invitation, while stdout stays a clean list of lines.
+func cmdEntry(args []string, env func(string) string, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet("entry", flag.ContinueOnError)
 	data := dataFlag(fs, env)
 	pos, err := parse(fs, args)
@@ -253,7 +261,76 @@ func cmdEntry(args []string, env func(string) string, out io.Writer) error {
 	for _, l := range lines {
 		fmt.Fprintln(out, l)
 	}
+	if cfg.Visibility == "hidden" || cfg.Cover == "" {
+		fmt.Fprintln(errOut, "warning: this node has no public card (no cover or hidden), so the line above is an address only:")
+		fmt.Fprintln(errOut, "it grants no access by itself. Invite the person with `echofog-node v2 invite create`, or add a cover.")
+	}
 	return nil
+}
+
+// cmdLink checks a link offline: no profile, no network. It is the support tool for "the link does
+// not open": the verdict says whether the card is fine, expired, too long for this device's clock,
+// damaged, or made by another version. The access secret is never printed.
+func cmdLink(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return usageError{errors.New("link needs check and a link: echofog-node v2 link check LINK")}
+	}
+	if args[0] != "check" {
+		return usageError{fmt.Errorf("unknown link command %q", args[0])}
+	}
+	fs := flag.NewFlagSet("link check", flag.ContinueOnError)
+	pos, err := parse(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageError{errors.New("link check needs exactly one link")}
+	}
+	pv, err := links.Open(strings.TrimSpace(pos[0]), time.Now())
+	if err != nil {
+		switch {
+		case errors.Is(err, links.ErrClock):
+			fmt.Fprintln(out, "clock: the time on this device differs from the node's; synchronise the clock and try again")
+		case errors.Is(err, links.ErrExpired):
+			fmt.Fprintln(out, "expired: the link is no longer valid")
+		case errors.Is(err, links.ErrMismatch):
+			fmt.Fprintln(out, "damaged: the link and its card do not match")
+		case errors.Is(err, links.ErrOtherVersion):
+			fmt.Fprintln(out, "other version: the link was made by another version of EchoFog")
+		case errors.Is(err, links.ErrNotLink):
+			fmt.Fprintln(out, "not a link: this is not an EchoFog link")
+		default:
+			fmt.Fprintf(out, "error: %v\n", err)
+		}
+		return errReported
+	}
+	fmt.Fprintf(out, "ok: %s link to node %s…, valid until %s\n",
+		pv.Kind, hex.EncodeToString(pv.Node[:4]), pv.NotAfter.UTC().Format(time.RFC3339))
+	return nil
+}
+
+// LinkCheckResult is the offline verdict for the doctor: the same classes as `v2 link check`, with
+// a message code for both languages. It never carries the access secret.
+func LinkCheckResult(text string) CheckResult {
+	pv, err := links.Open(strings.TrimSpace(text), time.Now())
+	r := CheckResult{ID: "link", Level: LevelOK, Code: "link.ok"}
+	switch {
+	case err == nil:
+		r.Args = []any{pv.NotAfter.UTC().Format(time.RFC3339)}
+	case errors.Is(err, links.ErrClock):
+		r.Code, r.Level = "link.clock", LevelWarn
+	case errors.Is(err, links.ErrExpired):
+		r.Code, r.Level = "link.expired", LevelFail
+	case errors.Is(err, links.ErrMismatch):
+		r.Code, r.Level = "link.damaged", LevelFail
+	case errors.Is(err, links.ErrOtherVersion):
+		r.Code, r.Level = "link.other-version", LevelFail
+	case errors.Is(err, links.ErrNotLink):
+		r.Code, r.Level = "link.not-a-link", LevelFail
+	default:
+		r.Code, r.Level = "link.error", LevelFail
+	}
+	return r
 }
 
 // ---- operator client
@@ -339,13 +416,20 @@ func cmdInvite(args []string, env func(string) string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// Terms are checked before any request.
+	// Terms are checked before any request. The invitation card lives at most 30 days, so a longer
+	// --link would be refused by the node or, worse, promised a date the card cannot reach.
 	for _, t := range []string{*accessTerm, *linkTerm} {
 		if t == "" {
 			continue
 		}
 		if _, err := ParseDuration(t); err != nil {
 			return usageError{err}
+		}
+	}
+	if *linkTerm != "" {
+		d, _ := ParseDuration(*linkTerm)
+		if d > 30*24*time.Hour {
+			return usageError{fmt.Errorf("--link %s is too long: an invitation link lives at most 30 days", *linkTerm)}
 		}
 	}
 	if sub != "create" && *outFile != "" {
@@ -369,6 +453,7 @@ func cmdInvite(args []string, env func(string) string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "id:           %s\nlink:         %s\nlink expires: %s\n", res.ID, res.Link, res.LinkExpires.Format(time.RFC3339))
+		fmt.Fprintln(out, "if the link does not open, check the clock on the device first: `echofog-node v2 link check LINK`")
 		if *outFile != "" {
 			// The link only: the file is a convenience for the operator, not a record of the
 			// invitation. It is private (mode 0600) and replaced whole by writePrivate.

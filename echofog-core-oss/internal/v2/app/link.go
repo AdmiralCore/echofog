@@ -276,8 +276,8 @@ func UserMessage(err error) string {
 	case errors.Is(err, ErrBadState):
 		return "Это действие сейчас недоступно для передачи"
 	case errors.Is(err, links.ErrNotLink), errors.Is(err, links.ErrOtherVersion), errors.Is(err, links.ErrMismatch),
-		errors.Is(err, links.ErrExpired), errors.Is(err, links.ErrRevoked), errors.Is(err, links.ErrNoContactLink),
-		errors.Is(err, links.ErrNoInviter):
+		errors.Is(err, links.ErrExpired), errors.Is(err, links.ErrRevoked), errors.Is(err, links.ErrUnreachable),
+		errors.Is(err, links.ErrClock), errors.Is(err, links.ErrNoContactLink), errors.Is(err, links.ErrNoInviter):
 		return links.UserMessage(err)
 	default:
 		if sc, ok := Screen(err); ok {

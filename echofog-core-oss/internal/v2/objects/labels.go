@@ -31,6 +31,11 @@ const (
 	// CardMaxLifetime and InviteCardMaxLifetime are the card lifetimes (objects.md §3.2, D12).
 	CardMaxLifetime       = 7 * day
 	InviteCardMaxLifetime = 30 * day
+	// InviteCardLifetime is what an invitation card is actually issued for: the protocol maximum
+	// minus one ClockSkew. A card minted for exactly the maximum is refused by a device whose
+	// clock is a few seconds behind ("objects: lifetime too long"), which reads as a damaged link.
+	// The margin makes the card survive the tolerance it is checked with.
+	InviteCardLifetime = InviteCardMaxLifetime - ClockSkew
 )
 
 // LabelInfo holds the limits of a known label.

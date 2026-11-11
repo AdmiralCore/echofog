@@ -130,6 +130,8 @@ func TestUpScript(t *testing.T) {
 		"deploy/v2/docker-compose.yml", "--env-file", "compose", "pull", "up -d",
 		"status --data /data --plain", "invite create", "--out /data/invite.txt", "/data/recovery-phrase.txt",
 		"ef-test", "ef-test-data", "8443", "down -v",
+		"sudo ufw allow", "gcloud compute firewall-rules", "Invitation links point to",
+		"v2 link check", "date -u",
 	} {
 		if !strings.Contains(sh, must) {
 			t.Errorf("up.sh lacks %q", must)
@@ -210,6 +212,38 @@ func TestUpScriptProductionPlan(t *testing.T) {
 			if _, err := os.Stat(name); err == nil {
 				t.Errorf("the dry run wrote %s", name)
 			}
+		}
+	}
+}
+
+// The port numbers the operator must open are printed with ready ufw and cloud commands, and they
+// follow the configuration: without a cover the invitation listener is PORT+1, with a cover it is
+// NOISE_PORT+1.
+func TestUpScriptNamesEveryOpenPort(t *testing.T) {
+	out, err := runUp(t, "--advertise", "203.0.113.10", "--invites", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry run without a cover: %v\n%s", err, out)
+	}
+	for _, must := range []string{
+		"sudo ufw allow 443/tcp", "sudo ufw allow 443/udp", "sudo ufw allow 444/udp",
+		"Invitation links point to 444/udp", "udp:443,444",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("the plan without a cover lacks %q:\n%s", must, out)
+		}
+	}
+	site := tempSite(t)
+	out, err = runUp(t, "--advertise", "203.0.113.10", "--invites",
+		"--cover", "node.example.org:443", "--site", site, "--dry-run")
+	if err != nil {
+		t.Fatalf("dry run with a cover: %v\n%s", err, out)
+	}
+	for _, must := range []string{
+		"sudo ufw allow 443/udp", "sudo ufw allow 444/udp", "sudo ufw allow 445/udp",
+		"Invitation links point to 445/udp", "udp:443,444,445",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("the plan with a cover lacks %q:\n%s", must, out)
 		}
 	}
 }

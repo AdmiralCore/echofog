@@ -360,6 +360,19 @@ func TestInviteMapsTheRequestToTheMintOptions(t *testing.T) {
 	}
 }
 
+func TestInviteLinkTermIsAMonthAtMost(t *testing.T) {
+	r := newRig(t, app.ModeHidden)
+	if _, err := r.a.Invite(context.Background(), app.InviteRequest{Days: 30, LinkHours: 24 * 30}); err != nil {
+		t.Fatalf("a 30-day link: %v", err)
+	}
+	if _, err := r.a.Invite(context.Background(), app.InviteRequest{LinkHours: 24*30 + 1}); !errors.Is(err, app.ErrRequest) {
+		t.Fatalf("a link longer than the card: %v, want ErrRequest", err)
+	}
+	if r.ln.invited != 1 {
+		t.Fatalf("the refused request reached the access manager: %d", r.ln.invited)
+	}
+}
+
 func TestInviteRefusals(t *testing.T) {
 	pub := newRig(t, app.ModePublic)
 	if _, err := pub.a.Invite(context.Background(), app.InviteRequest{Days: 1}); !errors.Is(err, app.ErrNotHidden) || pub.ln.invited != 0 {
