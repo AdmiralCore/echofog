@@ -21,11 +21,20 @@ func normCountry(cc string) string {
 	return cc
 }
 
+// CountryNone is the user's choice "do not specify a country": the policy uses the unknown row
+// whatever GeoIP or a platform hint says. Any other value that is not a two-letter code means
+// automatic.
+const CountryNone = "none"
+
 // SetCountry sets the user's country; "" (or anything that is not a two-letter code) means
-// automatic. It outranks every other source. New paths follow the new row; live sessions stay.
+// automatic, CountryNone means "do not specify it". It outranks every other source. New paths
+// follow the new row; live sessions stay.
 func (r *Runtime) SetCountry(cc string) {
+	choice := strings.ToLower(strings.TrimSpace(cc))
+	off := choice == CountryNone
 	r.countryMu.Lock()
-	r.countryUser = normCountry(cc)
+	r.countryOff = off
+	r.countryUser = normCountry(choice)
 	r.countryMu.Unlock()
 	r.noteCountry()
 }
@@ -44,8 +53,11 @@ func (r *Runtime) SetCountryHint(cc string) {
 // local address, the platform hint. Without any of them it is ("", CountryUnknown).
 func (r *Runtime) OwnCountry() (string, CountrySource) {
 	r.countryMu.Lock()
-	user, hint := r.countryUser, r.countryHint
+	user, hint, off := r.countryUser, r.countryHint, r.countryOff
 	r.countryMu.Unlock()
+	if off {
+		return "", CountryUnknown
+	}
 	if user != "" {
 		return user, CountrySet
 	}

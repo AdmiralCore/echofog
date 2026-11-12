@@ -1492,6 +1492,24 @@ export namespace node {
 		    return a;
 		}
 	}
+	export class CountryStatus {
+	    protocol: number;
+	    code?: string;
+	    source?: string;
+	    detected?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CountryStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.protocol = source["protocol"];
+	        this.code = source["code"];
+	        this.source = source["source"];
+	        this.detected = source["detected"];
+	    }
+	}
 	export class ExitClientDTO {
 	    id: string;
 	    label: string;

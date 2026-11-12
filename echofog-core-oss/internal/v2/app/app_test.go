@@ -99,6 +99,7 @@ type fakeRuntime struct {
 	status   node.Status
 	passes   []access.Info
 	class    routepolicy.NetClass
+	country  string
 	extended map[access.PassID]time.Duration
 	revoked  []access.PassID
 	rotated  int
@@ -123,6 +124,12 @@ func (f *fakeRuntime) RouteReport(d node.DeviceID) (node.RouteReport, bool) {
 }
 func (f *fakeRuntime) Status() node.Status            { return f.status }
 func (f *fakeRuntime) NetClass() routepolicy.NetClass { return f.class }
+func (f *fakeRuntime) OwnCountry() (string, node.CountrySource) {
+	if f.country == "" {
+		return "", node.CountryUnknown
+	}
+	return f.country, node.CountrySet
+}
 func (f *fakeRuntime) AccessList(context.Context) ([]access.Info, error) {
 	return append([]access.Info(nil), f.passes...), nil
 }
@@ -669,7 +676,7 @@ func TestReportCarriesNoAddressesIDsOrLinks(t *testing.T) {
 	if !strings.HasPrefix(rep, "EchoFog connection report") {
 		t.Fatalf("header: %q", rep)
 	}
-	for _, want := range []string{"app: 0.3.0", "protocol: 2", "mode: hidden", "sessions: 3", "direct 2", "relay 1"} {
+	for _, want := range []string{"app: 0.3.0", "protocol: 2", "mode: hidden", "sessions: 3", "direct 2", "relay 1", "country: unknown (unknown)"} {
 		if !strings.Contains(rep, want) {
 			t.Errorf("report lacks %q:\n%s", want, rep)
 		}

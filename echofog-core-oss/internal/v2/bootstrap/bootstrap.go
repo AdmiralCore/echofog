@@ -299,34 +299,63 @@ func (s *Service) Check(ctx context.Context, e Entry) bool {
 	defer cancel()
 	switch e.Kind {
 	case KindCard:
-		return s.join(ectx, e.Card)
+		if err := s.join(ectx, e.Card, !e.Builtin); err != nil {
+			s.logRefusal(e, err)
+			return false
+		}
+		return true
 	case KindDevice:
 		dev := node.DeviceID(e.Device)
-		res, err := s.host.DialBootstrap(ectx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask, Expected: &dev}, node.DialOpt{})
-		return err == nil && res != nil && res.Verified && res.Card != nil && res.Card.DeviceID == e.Device
+		res, err := s.host.DialBootstrap(ectx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask, Expected: &dev}, node.DialOpt{Explicit: !e.Builtin})
+		if err != nil {
+			s.logRefusal(e, err)
+			return false
+		}
+		return res != nil && res.Verified && res.Card != nil && res.Card.DeviceID == e.Device
 	case KindAddr:
-		res, err := s.host.DialBootstrap(ectx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask}, node.DialOpt{})
-		return err == nil && res != nil && res.Card != nil
+		res, err := s.host.DialBootstrap(ectx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask}, node.DialOpt{Explicit: !e.Builtin})
+		if err != nil {
+			s.logRefusal(e, err)
+			return false
+		}
+		return res != nil && res.Card != nil
 	}
 	return false
 }
 
 // one dials one entry. It returns the candidate card of a bare address, or joined for an
-// authenticated session.
+// authenticated session. The error of a failed dial is classified in the log and never swallowed
+// silently: "no route", "policy", "timeout" and "no-answer" are different problems.
 func (s *Service) one(ctx context.Context, e Entry) (cand *objects.Card, joined bool) {
 	switch e.Kind {
 	case KindCard:
-		return nil, s.join(ctx, e.Card)
-	case KindDevice:
-		dev := node.DeviceID(e.Device)
-		res, err := s.host.DialBootstrap(ctx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask, Expected: &dev}, node.DialOpt{})
-		if err != nil || res == nil || !res.Verified || res.Card == nil || res.Card.DeviceID != e.Device {
+		if err := s.join(ctx, e.Card, !e.Builtin); err != nil {
+			s.logRefusal(e, err)
 			return nil, false
 		}
-		return nil, s.join(ctx, res.Card)
+		return nil, true
+	case KindDevice:
+		dev := node.DeviceID(e.Device)
+		res, err := s.host.DialBootstrap(ctx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask, Expected: &dev}, node.DialOpt{Explicit: !e.Builtin})
+		if err != nil {
+			s.logRefusal(e, err)
+			return nil, false
+		}
+		if res == nil || !res.Verified || res.Card == nil || res.Card.DeviceID != e.Device {
+			return nil, false
+		}
+		if err := s.join(ctx, res.Card, !e.Builtin); err != nil {
+			s.logRefusal(e, err)
+			return nil, false
+		}
+		return nil, true
 	case KindAddr:
-		res, err := s.host.DialBootstrap(ctx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask}, node.DialOpt{})
-		if err != nil || res == nil || res.Card == nil {
+		res, err := s.host.DialBootstrap(ctx, node.BootstrapTarget{Addr: e.Addr, Mask: e.Mask}, node.DialOpt{Explicit: !e.Builtin})
+		if err != nil {
+			s.logRefusal(e, err)
+			return nil, false
+		}
+		if res == nil || res.Card == nil {
 			return nil, false
 		}
 		// Not verified, whatever the result says.
@@ -335,10 +364,20 @@ func (s *Service) one(ctx context.Context, e Entry) (cand *objects.Card, joined 
 	return nil, false
 }
 
-func (s *Service) join(ctx context.Context, card *objects.Card) bool {
-	if card == nil {
-		return false
+// logRefusal writes the class of a failed entry. A built-in entry may be named by its number; a
+// user's line, its address and its keys never reach the log.
+func (s *Service) logRefusal(e Entry, err error) {
+	attrs := []any{"class", node.DialFailureClass(err)}
+	if e.Builtin {
+		attrs = append(attrs, "builtin", e.Index)
 	}
-	_, _, err := s.host.Session(ctx, node.DeviceID(card.DeviceID), node.DialOpt{Card: card})
-	return err == nil
+	s.log.Debug("bootstrap: entry refused", attrs...)
+}
+
+func (s *Service) join(ctx context.Context, card *objects.Card, explicit bool) error {
+	if card == nil {
+		return errors.New("bootstrap: no card")
+	}
+	_, _, err := s.host.Session(ctx, node.DeviceID(card.DeviceID), node.DialOpt{Card: card, Explicit: explicit})
+	return err
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -574,6 +575,9 @@ func TestRedeemInvitation(t *testing.T) {
 	if d.count() != 1 || len(d.calls[0].opt.AccessSecret) != 16 {
 		t.Fatalf("dial %+v", d.calls)
 	}
+	if !d.calls[0].opt.Explicit {
+		t.Fatal("an invitation dial must be explicit: the country policy must not cut the link's listener")
+	}
 	if pid := objects.PassID(d.calls[0].opt.AccessSecret); access.PassID(pid) != inv.PassID {
 		t.Fatalf("dialed with the secret of pass %x, want %s", pid, inv.PassID)
 	}
@@ -693,6 +697,35 @@ func TestRedeemFailures(t *testing.T) {
 			t.Fatal("accepted a session with a device other than the card's")
 		}
 	})
+}
+
+func TestRedeemLogsTheFailureClassWithoutTheLink(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, cards.Hidden)
+	var buf bytes.Buffer
+	cfg := links.Config{
+		Cards: r.builder, Inviter: r.mgr, Clock: &fakeClock{now: testNow},
+		Dialer: &fakeDialer{err: fmt.Errorf("session: %w", session.ErrSilent)},
+		Log:    slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+	s, err := links.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := s.Invite(t.Context(), access.MintOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Redeem(t.Context(), inv.URL); !errors.Is(err, links.ErrRevoked) {
+		t.Fatalf("Redeem: %v", err)
+	}
+	text := buf.String()
+	if !strings.Contains(text, "class=no-answer") {
+		t.Fatalf("the refusal has no class: %s", text)
+	}
+	if strings.Contains(text, "echofog://") || strings.Contains(text, inv.URL) {
+		t.Fatalf("the log carries the link: %s", text)
+	}
 }
 
 func TestUserMessages(t *testing.T) {

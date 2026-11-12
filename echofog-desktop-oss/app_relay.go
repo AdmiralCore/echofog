@@ -77,6 +77,25 @@ func (a *App) RemoveBootstrapNode(entry string) error {
 	return nodeAPI.RemoveBootstrapNode(entry)
 }
 
+// GetCountry reports the country setting of protocol 2 (V2-FIELD-1).
+func (a *App) GetCountry() (api.CountryStatus, error) {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return api.CountryStatus{}, errNodeNotStarted
+	}
+	return nodeAPI.GetCountry()
+}
+
+// SetCountry saves the country choice and applies it at once: "" is automatic, "none" is "do not
+// specify", and a two-letter code is the user's own answer.
+func (a *App) SetCountry(choice string) error {
+	nodeAPI := a.getAPI()
+	if nodeAPI == nil {
+		return errNodeNotStarted
+	}
+	return nodeAPI.SetCountry(choice)
+}
+
 // SharingApprove confirms a client waiting for the owner of the shared connection.
 func (a *App) SharingApprove(id, label string) error {
 	nodeAPI := a.getAPI()

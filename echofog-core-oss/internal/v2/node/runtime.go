@@ -246,11 +246,13 @@ type Runtime struct {
 	// flowSeq numbers the flows the freeze watcher sees.
 	flowSeq atomic.Uint64
 
-	// The sources of the own country (T6.4c); countryLast is the one last reported.
+	// The sources of the own country (T6.4c); countryLast is the one last reported. countryOff is
+	// the user's "do not specify": the unknown row applies whatever GeoIP says.
 	countryMu   sync.Mutex
 	countryUser string
 	countryHint string
 	countryLast string
+	countryOff  bool
 
 	cardBook *session.CardBook
 	bindings *session.KeyBindings

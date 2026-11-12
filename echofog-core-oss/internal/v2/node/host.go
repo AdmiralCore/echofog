@@ -86,6 +86,11 @@ type DialOpt struct {
 	// Probe makes a direct dial that the country policy would forbid, limited to the probe budget of
 	// the rule and to TCP suites: a reachability check, never a session to carry traffic (T6.4).
 	Probe bool
+	// Explicit marks a dial to a peer the user named itself: an invitation or contact link, or an
+	// entry line the user added. The country policy does not filter it: the user asked for this
+	// carrier, and the unknown row would otherwise cut, for example, the noise3 listener of the
+	// link (T6.4c). Automatic dials (the official list, DHT, PEX) stay under the policy.
+	Explicit bool
 }
 
 // PeerStore is Host.Peers(): the new/tried candidate table of pex/2 (services.md §3). A candidate

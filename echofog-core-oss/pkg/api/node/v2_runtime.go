@@ -70,6 +70,9 @@ type v2Settings struct {
 	Advertise string `json:"advertise,omitempty"`
 	// Bootstrap is the path of a bootstrap list (T5.5) or the user's entries (T5.6), or both.
 	Bootstrap bootstrapSetting `json:"bootstrap,omitempty"`
+	// Country is the user's country choice (V2-FIELD-1): "" automatic, "none" do not specify,
+	// otherwise a two-letter code. It outranks GeoIP in the route policy.
+	Country string `json:"country,omitempty"`
 }
 
 // bootstrapSetting is node.json "bootstrap": a file path (the T5.5 list), the user's own entries
@@ -203,6 +206,9 @@ func (n *NodeApi) startV2Locked() error {
 		s.close()
 		return fmt.Errorf("v2 runtime: %w", err)
 	}
+	// The call transport exists only after Runtime.Start registered the services, so the call
+	// layer is built here, not while the stack is assembled (V2-FIELD-1: "v2 calls are off").
+	s.startCalls(n.Logger)
 	n.v2s = s
 	n.AttachV2(s.ap)
 	n.AttachV2Messenger(s.ap)
@@ -697,6 +703,8 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("node: %w", err)
 	}
+	// The user's country choice outranks GeoIP. "none" leaves the policy on the unknown row.
+	rt.SetCountry(set.Country)
 	ref.set(rt)
 	s.rt = rt
 
@@ -704,7 +712,7 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 	if n.v2h.Dialer != nil {
 		dialer = n.v2h.Dialer(rt)
 	}
-	lcfg := links.Config{Cards: builder, Dialer: dialer, Clock: rt.Clock()}
+	lcfg := links.Config{Cards: builder, Dialer: dialer, Clock: rt.Clock(), Log: n.Logger}
 	if mgr != nil {
 		lcfg.Inviter = mgr
 	}
@@ -768,13 +776,25 @@ func (n *NodeApi) buildV2() (*v2Stack, error) {
 	appMu.Unlock()
 	s.ap = a
 
-	if c, err := app.NewCalls(app.CallsConfig{Host: rt, Signer: v2CallSigner{s.device}, Self: types.PeerID(s.device.ID())}); err == nil {
-		s.calls = c
-	} else if n.Logger != nil {
-		n.Logger.Warn("v2 calls are off", "err", err)
-	}
 	ok = true
 	return s, nil
+}
+
+// startCalls builds the call layer over the runtime's call transport. The transport is created by
+// Runtime.Start when it registers call/2, so this must run after app.Start; building it earlier
+// left calls off for the whole session.
+func (s *v2Stack) startCalls(log *slog.Logger) {
+	if s.rt == nil || s.device == nil {
+		return
+	}
+	c, err := app.NewCalls(app.CallsConfig{Host: s.rt, Signer: v2CallSigner{s.device}, Self: types.PeerID(s.device.ID())})
+	if err != nil {
+		if log != nil {
+			log.Warn("v2 calls are off", "err", err)
+		}
+		return
+	}
+	s.calls = c
 }
 
 // mailboxRelays lists the connected relays that keep queues (the mailbox role).

@@ -150,6 +150,8 @@ export function GetChatHistory(arg1:string,arg2:number,arg3:number):Promise<Arra
 
 export function GetContacts():Promise<Array<dto.ContactDTO>>;
 
+export function GetCountry():Promise<node.CountryStatus>;
+
 export function GetDownloadDir():Promise<string>;
 
 export function GetExitPayment():Promise<node.ExitPaymentStatus>;
@@ -379,6 +381,8 @@ export function SetBootstrapNodeEnabled(arg1:number,arg2:boolean):Promise<void>;
 export function SetCallBackdrop(arg1:string):Promise<void>;
 
 export function SetContactProfile(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function SetCountry(arg1:string):Promise<void>;
 
 export function SetCustomSites(arg1:Array<string>):Promise<void>;
 

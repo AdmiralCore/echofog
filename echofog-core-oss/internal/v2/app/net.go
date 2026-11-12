@@ -84,6 +84,15 @@ func (a *App) Report() string {
 	line("EchoFog connection report — no addresses, IDs, links or contacts")
 	line("app: %s  protocol: 2  os: %s/%s", version, runtime.GOOS, runtime.GOARCH)
 	line("mode: %s  platform: %s  network: %s", ns.Mode, st.Profile.Platform, ns.NetClass)
+	if oc, ok := a.cfg.Runtime.(interface {
+		OwnCountry() (string, node.CountrySource)
+	}); ok {
+		cc, src := oc.OwnCountry()
+		if cc == "" {
+			cc = "unknown"
+		}
+		line("country: %s (%s)", cc, src)
+	}
 	if next := a.NextMode(); next != "" {
 		line("mode after restart: %s", next)
 	}

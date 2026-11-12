@@ -28,6 +28,64 @@ func bTLS(c *cards.Config) {
 		cards.Listener{Suite: objects.SuiteReality2QUIC, Host: "203.0.113.11", Port: 443, SNI: "example.com", Mask: c.Listeners[0].Mask})
 }
 
+// A client with a known GeoIP country can still say "do not specify": the unknown row applies
+// until the user picks a country again or returns to automatic (V2-FIELD-1).
+func TestCountryNoneForcesTheUnknownRow(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{bCover: true})
+	if cc, src := w.a.rt.OwnCountry(); cc != "RU" || src != node.CountryAuto {
+		t.Fatalf("before: %q %s, want the GeoIP country", cc, src)
+	}
+	w.a.rt.SetCountry(node.CountryNone)
+	if cc, src := w.a.rt.OwnCountry(); cc != "" || src != node.CountryUnknown {
+		t.Fatalf("do not specify: %q %s, want an unknown country", cc, src)
+	}
+	w.a.rt.SetCountry("de")
+	if cc, src := w.a.rt.OwnCountry(); cc != "DE" || src != node.CountrySet {
+		t.Fatalf("manual: %q %s", cc, src)
+	}
+	w.a.rt.SetCountry("")
+	if cc, src := w.a.rt.OwnCountry(); cc != "RU" || src != node.CountryAuto {
+		t.Fatalf("automatic again: %q %s", cc, src)
+	}
+}
+
+// An explicit dial (an invitation link, an entry the user added) is not cut by the unknown row:
+// the user named that carrier, and the client reaches the node it was given (V2-FIELD-1).
+func TestExplicitEntryDialsTheCarrierItNames(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true, bMutate: bTLS})
+	if cc, src := w.a.rt.OwnCountry(); cc != "" || src != node.CountryUnknown {
+		t.Fatalf("the world must start unknown: %q %s", cc, src)
+	}
+	_, _ = w.open(t, node.DialOpt{Explicit: true})
+	if n := w.log.count(isUDPSuite); n == 0 {
+		t.Fatal("an explicit dial left the UDP carriers out: the country policy cut the link")
+	}
+}
+
+// The same for a bootstrap entry: a user's line is explicit, an official one stays under the
+// policy.
+func TestExplicitBootstrapEntryIsNotFiltered(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true})
+	mask := keys.New(keys.X25519, make([]byte, 32))
+	_, _ = w.a.rt.DialBootstrap(w.ctx, node.BootstrapTarget{
+		Addr: &pb.Addr{Suite: objects.SuiteNoise3, Host: "203.0.113.5", Port: 4430}, Mask: mask}, node.DialOpt{Explicit: true})
+	if n := w.log.count(isUDPSuite); n == 0 {
+		t.Fatal("an explicit bootstrap entry does not try the suite it names")
+	}
+}
+
+// T5.6: the built-in list must contain an entry the unknown row still lets through. reality2-tcp
+// and ws2 are that entry kind; noise3 and QUIC are not dialed while the country is unknown.
+func TestUnknownCountryLeavesATCPBootstrapEntry(t *testing.T) {
+	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true})
+	mask := keys.New(keys.X25519, make([]byte, 32))
+	_, _ = w.a.rt.DialBootstrap(w.ctx, node.BootstrapTarget{
+		Addr: &pb.Addr{Suite: objects.SuiteReality2TCP, Host: "203.0.113.5", Port: 443}, Mask: mask}, node.DialOpt{})
+	if n := w.log.count(func(c dialCall) bool { return c.suite == objects.SuiteReality2TCP }); n == 0 {
+		t.Fatal("the unknown row leaves no reality2-tcp bootstrap entry: T5.6 has nothing to dial")
+	}
+}
+
 func TestUnknownCountryDialsTLSOverTCPOnly(t *testing.T) {
 	w := newRouteWorld(t, routeOpts{noLocal: true, bCover: true, bMutate: bTLS})
 	_, _ = w.open(t, node.DialOpt{})
