@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -60,22 +59,9 @@ func warn(log *slog.Logger, msg string, err error) {
 
 // saveV2Bootstrap writes the user's entries back to node.json, keeping every other setting.
 func saveV2Bootstrap(dir string, lines []string) error {
-	if dir == "" {
-		return errors.New("v2 bootstrap: no profile directory")
-	}
-	set, err := loadV2Settings(dir)
-	if err != nil {
-		return err
-	}
-	set.Bootstrap.Entries = append([]string(nil), lines...)
-	raw, err := json.MarshalIndent(set, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, v2SettingsFile), raw, 0o600)
+	return updateV2Settings(dir, func(set *v2Settings) {
+		set.Bootstrap.Entries = append([]string(nil), lines...)
+	})
 }
 
 // v2BootstrapManager returns the list manager of the running stack, or nil.

@@ -23,6 +23,7 @@
   import { feedPref, COMPACT_ABOVE } from '../stores/feed.js';
   import { focus } from '../stores/nav.js';
   import BootstrapCard from '../components/BootstrapCard.svelte';
+  import CountryCard from '../components/CountryCard.svelte';
   import GuardCard from '../components/GuardCard.svelte';
   import ProxyCard from '../components/ProxyCard.svelte';
   import AnonymityCard from '../components/AnonymityCard.svelte';
@@ -64,6 +65,7 @@
     { id: 'remember', g: 'privacy', kw: ['remember.title'] },
     { id: 'lock', g: 'privacy', kw: ['settings.lockTitle', 'settings.lockHint'] },
     { id: 'network', g: 'network', kw: ['settings.network', 'settings.networkHint', 'settings.directSocket'] },
+    { id: 'country', g: 'network', kw: ['country.title', 'country.hint', 'country.auto', 'country.none'] },
     { id: 'anon', g: 'network', kw: ['anon.title'] },
     { id: 'guard', g: 'network', kw: ['guard.title'] },
     { id: 'proxy', g: 'network', kw: ['netproxy.title'] },
@@ -321,6 +323,7 @@
       {#if shown('logs')}<div id="s-logs"><Logs embedded /></div>{/if}
 
       {#if shown('anon')}<div id="s-anon"><AnonymityCard /></div>{/if}
+      {#if shown('country')}<div id="s-country"><CountryCard /></div>{/if}
       {#if shown('guard')}<div id="s-guard"><GuardCard /></div>{/if}
       {#if shown('proxy')}<div id="s-proxy"><ProxyCard /></div>{/if}
       {#if shown('protocol')}<div id="s-protocol"><ProtocolCard /></div>{/if}

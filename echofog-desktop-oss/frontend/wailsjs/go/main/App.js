@@ -286,6 +286,10 @@ export function GetContacts() {
   return window['go']['main']['App']['GetContacts']();
 }
 
+export function GetCountry() {
+  return window['go']['main']['App']['GetCountry']();
+}
+
 export function GetDownloadDir() {
   return window['go']['main']['App']['GetDownloadDir']();
 }
@@ -744,6 +748,10 @@ export function SetCallBackdrop(arg1) {
 
 export function SetContactProfile(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetContactProfile'](arg1, arg2, arg3);
+}
+
+export function SetCountry(arg1) {
+  return window['go']['main']['App']['SetCountry'](arg1);
 }
 
 export function SetCustomSites(arg1) {

@@ -112,6 +112,9 @@ type Config struct {
 	Clock Clock
 	// JoinHost is the host of the join page for the web form of links ("" = no web form).
 	JoinHost string
+	// Log receives the class of a failed redemption (policy, no-answer, timeout, ...), never the
+	// link, the card or an address. Nil keeps the log quiet.
+	Log *slog.Logger
 }
 
 // Link is a contact link and its web form.
@@ -301,8 +304,11 @@ func (s *Service) Redeem(ctx context.Context, link string) (node.Peer, error) {
 		}
 	}()
 	device := node.DeviceID(pv.Device)
-	peer, _, err := s.cfg.Dialer.Session(ctx, device, node.DialOpt{Card: pv.Card, AccessSecret: secret})
+	peer, _, err := s.cfg.Dialer.Session(ctx, device, node.DialOpt{Card: pv.Card, AccessSecret: secret, Explicit: true})
 	if err != nil {
+		// The link names the device and the listener: the user asked for this carrier, so the
+		// country policy must not cut it (V2-FIELD-1).
+		s.logFailure(pv.Kind, err)
 		// A timeout is the shape a closed UDP port takes: no answer arrived, so it is the
 		// transport talking, not the invitation. A cancellation is the caller's own decision and
 		// stays as it is.
@@ -332,6 +338,14 @@ func (s *Service) Redeem(ctx context.Context, link string) (node.Peer, error) {
 		return node.Peer{}, errors.New("links: the session is not with the device of the link")
 	}
 	return peer, nil
+}
+
+// logFailure writes why a link opened or not, by class only: no link, card, device or address.
+func (s *Service) logFailure(kind Kind, err error) {
+	if s.cfg.Log == nil || err == nil {
+		return
+	}
+	s.cfg.Log.Debug("links: a link could not be used", "kind", kind.String(), "class", node.DialFailureClass(err))
 }
 
 // UserMessage is the Russian text of an error for the UI, in a neutral form. It never repeats the

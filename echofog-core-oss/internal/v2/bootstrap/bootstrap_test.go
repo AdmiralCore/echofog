@@ -1,8 +1,10 @@
 package bootstrap_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -10,8 +12,11 @@ import (
 	"time"
 
 	"github.com/echofog/echofog-core/internal/v2/bootstrap"
+	"github.com/echofog/echofog-core/internal/v2/keys"
 	"github.com/echofog/echofog-core/internal/v2/mux"
 	"github.com/echofog/echofog-core/internal/v2/node"
+	"github.com/echofog/echofog-core/internal/v2/objects"
+	pb "github.com/echofog/echofog-core/internal/v2/objects/pb"
 )
 
 const (
@@ -94,21 +99,24 @@ type fakeHost struct {
 	mu        sync.Mutex
 	sessions  []node.DeviceID
 	bootstrap []node.BootstrapTarget
+	opts      []node.DialOpt
 	result    *node.BootstrapResult
 	err       error
 }
 
-func (h *fakeHost) Session(_ context.Context, peer node.DeviceID, _ node.DialOpt) (node.Peer, *mux.Session, error) {
+func (h *fakeHost) Session(_ context.Context, peer node.DeviceID, opt node.DialOpt) (node.Peer, *mux.Session, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sessions = append(h.sessions, peer)
+	h.opts = append(h.opts, opt)
 	return node.Peer{Device: peer}, nil, h.err
 }
 
-func (h *fakeHost) DialBootstrap(_ context.Context, t node.BootstrapTarget, _ node.DialOpt) (*node.BootstrapResult, error) {
+func (h *fakeHost) DialBootstrap(_ context.Context, t node.BootstrapTarget, opt node.DialOpt) (*node.BootstrapResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.bootstrap = append(h.bootstrap, t)
+	h.opts = append(h.opts, opt)
 	return h.result, h.err
 }
 
@@ -159,5 +167,48 @@ func TestRunFailureIsCounted(t *testing.T) {
 	rep := run(t, h, "noise3://192.0.2.10:4430?mask="+hexM+"&device="+hexA)
 	if rep.Failed != 1 || rep.Joined != 0 {
 		t.Fatalf("report %+v", rep)
+	}
+}
+
+// A user's entry is an explicit dial: the country policy must not cut it, and a refusal is logged
+// by class, without the line or the address (V2-FIELD-1).
+func TestUserEntryIsExplicitAndRefusalIsClassed(t *testing.T) {
+	h := &fakeHost{err: node.ErrNoDomesticEntry}
+	es, err := bootstrap.Parse("noise3://192.0.2.10:4430?mask="+hexM, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	rep := bootstrap.New(h, es, func() time.Time { return testNow }).Log(log).Run(context.Background())
+	if rep.Failed != 1 {
+		t.Fatalf("report %+v", rep)
+	}
+	if len(h.opts) != 1 || !h.opts[0].Explicit {
+		t.Fatalf("a user's entry must be explicit: %+v", h.opts)
+	}
+	text := buf.String()
+	if !strings.Contains(text, "class=policy") {
+		t.Fatalf("the refusal has no class: %s", text)
+	}
+	if strings.Contains(text, "192.0.2.10") || strings.Contains(text, hexM) {
+		t.Fatalf("the log carries the entry: %s", text)
+	}
+}
+
+func TestBuiltinEntryStaysUnderThePolicy(t *testing.T) {
+	h := &fakeHost{err: node.ErrNoDomesticEntry}
+	e := bootstrap.Entry{
+		Kind: bootstrap.KindAddr, Addr: &pb.Addr{Suite: objects.SuiteNoise3, Host: "192.0.2.10", Port: 4430},
+		Mask: keys.New(keys.X25519, make([]byte, 32)), Builtin: true, Index: 7,
+	}
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	_ = bootstrap.New(h, []bootstrap.Entry{e}, func() time.Time { return testNow }).Log(log).Run(context.Background())
+	if len(h.opts) != 1 || h.opts[0].Explicit {
+		t.Fatalf("an official entry must follow the policy: %+v", h.opts)
+	}
+	if text := buf.String(); !strings.Contains(text, "builtin=7") || !strings.Contains(text, "class=policy") {
+		t.Fatalf("the official entry's refusal is not classed by number: %s", text)
 	}
 }

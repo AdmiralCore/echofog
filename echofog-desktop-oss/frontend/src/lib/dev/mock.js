@@ -560,6 +560,10 @@ created by github.com/echofog/echofog-core/pkg/node.(*Node).Start in goroutine 1
   GetLogsText: () => logsMock().map((e) => `${e.time} ${e.level.toUpperCase()} ${e.message}`).join('\n'),
   ExportLogs: () => 'C:/Users/demo/echofog-logs-mock.txt',
   GetBootstrapNodes: () => ({ ...bootMock, peers: OFFLINE && !bootMock.custom.some((n) => n.connected) ? 0 : 7 }),
+  GetCountry() {
+    return { protocol: 2, code: '', source: 'auto', detected: (new URLSearchParams(location.search).get('country') || 'RU').toUpperCase() };
+  },
+  SetCountry: () => {},
   guardMock: undefined,
   pinnedMock: [],
   GetGuardStatus() {
